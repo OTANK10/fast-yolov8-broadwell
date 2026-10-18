@@ -1,0 +1,15 @@
+build/
+cmake-build-*/
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+*.onnx
+*.pt
+*.bin
+*.npy
+*.npz
+data/models/
+data/tensors/
+data/images/
+results/raw/

@@ -1,0 +1,15 @@
+name: Build and test starter kernels
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

@@ -1,2 +1,6 @@
 ultralytics
 onnx
+onnxslim
+onnxruntime
+opencv-python-headless
+matplotlib

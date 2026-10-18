@@ -1,46 +1,43 @@
 # Fast YOLOv8n on Intel Broadwell
 
 **CMU 18-645: How to Write Fast Code — Fall 2026**  
-**Status:** Starter repository; performance optimization is *not* implemented yet.
+**Status:** Shared harness, layouts, per-layer data dumps and baselines are in. Stride-1 has a first AVX2 kernel (v1); stride-2, 1×1 and SPPF are correct scalar fallbacks waiting for their owners.
 
 ## Start here (5 minutes)
 
 We are **not training YOLO**. We are rebuilding selected YOLOv8n inference operations as fast C++ kernels and measuring how efficiently they use the Intel Xeon E5-2640 v4 (Broadwell) CPU. Our source model is the **YOLOv8n** variant, not whatever newest YOLO model Ultralytics advertises.
 
-1. **Build the starting C++ code** (macOS/Linux, CMake and C++17 compiler needed):
+1. **One-time setup on ece007** (venv, model export, real-layer dumps, Broadwell build, tests):
 
    ```sh
-   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-   cmake --build build -j
-   ctest --test-dir build --output-on-failure
-   ./build/bench_conv
+   cd /scratch/$USER/645 && git clone git@github.com:OTANK10/fast-yolov8-broadwell.git
+   cd fast-yolov8-broadwell && bash scripts/setup_ece007.sh
+   source /scratch/$USER/645/venv/bin/activate      # every new shell
    ```
 
-2. **Export the YOLOv8n model** (optional first day; needs Python + internet):
+   This exports `data/models/yolov8n_b1.onnx` and dumps every conv layer's real input, weights, bias and baseline outputs to `data/tensors/b1/<layer>/` (both are symlinks to scratch, never committed). The layer list with owners and FLOPs is in [docs/LAYERS.md](docs/LAYERS.md).
+
+2. **The daily loop**:
 
    ```sh
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   python scripts/export_model.py
+   cmake --build build -j && ctest --test-dir build --output-on-failure    # random-data checks, any machine
+   ./build/bench_layer data/tensors/b1/model.4.m.0.cv1 s1_v1               # one real layer: check vs baseline, then time
+   scripts/run_kernels.sh s1_v1 3x3s1                                      # all your layers -> results/*.csv
+   python scripts/baseline_bench.py --batch 1 --threads 1                  # OpenCV DNN + ONNX Runtime per layer
+   python scripts/plot_results.py results/s1_v1_b1_t1.csv results/baseline_b1_t1.csv
    ```
 
-   Expected result: `data/models/yolov8n.onnx`. This is just a model export; **it does not yet extract per-layer reference tensors**. Keep the large model and data files untracked.
+   Kernel names: `s1_v0`, `s1_v1` (Om), `s2_v1` (O'Malley), `1x1_v1`, plus `generic` and `ref`. Kinds for `run_kernels.sh`: `3x3s1`, `3x3s2`, `1x1`.
 
-3. **Create branches:** `om/conv3x3-s1`, `sherlock/conv3x3-s2`, `simon/sppf`. Open pull requests for shared changes.
+3. **Branches:** `om/conv3x3-s1`, `sherlock/conv3x3-s2`, `simon/sppf`. Open pull requests for shared changes. Git setup and rules: [docs/WORKFLOW.md](docs/WORKFLOW.md).
 
-4. **Find the target machine**. Develop correctness anywhere, but run reportable AVX2/FMA performance experiments on the department's Broadwell Xeon.
+4. **Correctness anywhere, performance on ece007.** Without `-DYOLO_ENABLE_BROADWELL=ON` (e.g. on a Mac) the AVX2 kernels fall back to scalar code so everything still builds and tests pass, but only ece007 numbers go in the report.
 
 ### What Om is doing
 
-Om owns **3×3, stride-1 FP32 convolution inside YOLOv8n C2f bottleneck blocks**:
+Om owns **3×3, stride-1 FP32 convolution**: the 20 C2f bottleneck layers plus the 12 stride-1 layers in the Detect head, which the same kernel handles (32 layers, 66% of the model's FLOPs). Design notes: [docs/STRIDE1_GUIDE.md](docs/STRIDE1_GUIDE.md).
 
-- Find one actual stride-1 layer's input shape and weight shape in the ONNX model.
-- First verify the scalar (slow but correct) reference, including channels and padding.
-- Implement a new optimized version in `src/conv3x3_s1.cpp` using AVX2/FMA and (eventually) blocked channel layout, without silently changing the answer.
-- Measure cycles/time and derive FP32 FLOPs/cycle; explain register allocation, throughput, memory layout, and why actual speed differs from theoretical peak.
-
-**Current state:** `conv3x3_s1` is a *correctness-first placeholder* that calls the scalar reference. Benchmark output is **not** evidence of an optimized kernel.
+**Current state:** `s1_v0` (scalar, blocked layout) and `s1_v1` (AVX2 2×5 register-blocked microkernel, 10 FMA accumulators, OpenMP) pass on all 32 real layers against the baseline outputs. Not yet measured on ece007; next are cache blocking over input channels, thread scaling and NUMA.
 
 ## Who owns what
 
@@ -63,7 +60,7 @@ For 32-bit FMA, Broadwell's advertised **per-core compute peak is 32 FP32 FLOPs/
 
 For each real layer shape, report: tensor shapes, validation error (absolute **and** relative tolerance), median time/cycles, operation count, FLOPs/cycle, % of relevant theoretical peak, baseline timing, compiler options, thread count, and conversion/copy costs when relevant. The toy benchmark provided here is **only a smoke test**, not a scientifically controlled result.
 
-We propose **NCHW8c** channel blocking and a register-tiled AVX2/FMA microkernel. The starter reference operates in plain **NCHW** and **OIHW**. Converting to NCHW8c, designing packed weights, and measuring conversion cost are *future implementation tasks*.
+**Shared layout contract** (`include/common.h`): activations are **NCHW8c** with a 1-pixel zero halo on every plane (no edge branches in 3×3 kernels, and any layer's output feeds the next directly); weights are packed offline to `[K/8][C/8][R][S][8 ic][8 oc]`; every kernel has the signature `f(const conv_desc_t*, const float *in, const float *w, const float *bias, float *out)`. The ONNX export already folds BatchNorm into each Conv's weights and bias (the graph has no BatchNormalization nodes), and SiLU is applied in registers by `include/epilogue.h`. Because everyone codes against this one header and the harness feeds every kernel the same real tensors, the three kernels are developed in parallel with no hand-offs.
 
 ## Schedule: milestone execution
 
@@ -93,36 +90,38 @@ We propose **NCHW8c** channel blocking and a register-tiled AVX2/FMA microkernel
 ## Directory map
 
 ```text
-include/       Public reference and placeholder kernel interfaces
-src/           Reference operations and per-member kernel files
-benchmarks/    Small repeatable smoke-test benchmark (not final methodology)
-tests/         Automated numerical correctness/unit tests
-scripts/       Export pretrained YOLOv8n to ONNX
-data/          Local models, tensors and images (ignored by Git)
+include/       common.h (layouts, conv_desc_t, signature, timing), epilogue.h (AVX2 SiLU), kernels.h
+src/           layout.cpp, reference_conv.cpp (never optimize), one file per owner's kernel
+benchmarks/    bench_layer.cpp: real-layer correctness (max rel err <= 1e-4) + cycles, FLOPs/cycle, % peak
+tests/         Random-data correctness of every kernel on yolov8n channel counts (runs in CI)
+scripts/       export_model, dump_layers, baseline_bench, run_kernels, plot_results, setup_ece007, fetch_coco_val
+data/          models/ and tensors/ (symlinks to scratch, ignored by Git)
 results/       Tables/plots and documented configs (not raw giant dumps)
 docs/milestone/ Presentation and report work
-.github/       CI to compile and run starter tests
+docs/          WORKFLOW.md, STRIDE1_GUIDE.md, LAYERS.md
+.github/       CI: build + ctest with and without AVX2
 ```
 
 ## Developer commands
 
-On Broadwell **only** (or another compiler/CPU supporting the target flags) you may additionally pass `-DYOLO_ENABLE_BROADWELL=ON`:
+On Broadwell (or any x86 CPU with AVX2/FMA) pass `-DYOLO_ENABLE_BROADWELL=ON`; this is what turns on the fast kernels:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DYOLO_ENABLE_BROADWELL=ON
 cmake --build build -j
 ctest --test-dir build --output-on-failure
+cmake --build build --target asm_s1      # generated assembly of the stride-1 kernel -> build/conv3x3_s1.s
 ```
 
 Do **not** enable Broadwell targeting on Apple Silicon. Do not use `-ffast-math` without accounting for changed floating-point behavior. Do not compare different compiler flags as though only the algorithm changed.
 
 ## Next pieces that are NOT implemented
 
-- A script to obtain **intermediate per-layer activations, weights and reference outputs** from a selected ONNX model (team must write this; ONNX export alone is insufficient).
-- A true **AVX2 direct convolution** and NCHW8c conversion/packed-weight code.
-- OpenCV DNN / ONNX Runtime per-layer baseline measurement infrastructure.
-- Robust benchmark harness (pin cores, warm caches consistently, synchronize threads, repeated trials, optional hardware performance counters).
-- 1×1 kernel if approved as meaningful project scope.
+- Optimized stride-2 (`src/conv3x3_s2.cpp`), 1×1 (`src/conv1x1.cpp`) and SPPF max-pool kernels; each currently forwards to a correct scalar version.
+- SPPF entry in `bench_layer` (the MaxPool tensors are already dumped).
+- Cache blocking, NUMA-aware first-touch and thread-scaling study for 20 cores.
+- Cross-layer fusion: Bottleneck residual add in the epilogue, free C2f Split/Concat in NCHW8c.
+- Batch 16 dumps from COCO val (`scripts/fetch_coco_val.sh`, then `dump_layers.py --batch 16 --only 3x3s1`).
 
 ## Workflow rules
 
@@ -135,6 +134,7 @@ Do **not** enable Broadwell targeting on Apple Silicon. Do not use `-ffast-math`
 
 - Project proposal: *Fast Direct Convolution for YOLOv8 Inference on a Broadwell Xeon* (team proposal, October 2026)
 - CMU 18-645 project overview and milestone instructions (Canvas)
-- Ultralytics: https://github.com/ultralytics/ultralytics
+- Ultralytics: https://github.com/ultralytics/ultralytics (YOLOv8 architecture in `ultralytics/cfg/models/v8/yolov8.yaml`, "n" scale = depth 0.33, width 0.25; layers in `ultralytics/nn/modules/conv.py`, `block.py` (C2f, Bottleneck, SPPF), `head.py` (Detect)). Weights `yolov8n.pt` download from https://github.com/ultralytics/assets/releases
+- Netron (view the exported ONNX graph): https://netron.app
 - YOLOv8 documentation: https://docs.ultralytics.com/models/yolov8/
 - OpenCV DNN: https://docs.opencv.org/4.x/d6/d0f/group__dnn.html

@@ -1,14 +1,17 @@
-name: Build and test starter kernels
+name: Build and test kernels
 on:
   push:
   pull_request:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        broadwell: [OFF, ON]   # ON compiles and tests the AVX2/FMA paths (runner CPUs have AVX2)
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DYOLO_ENABLE_BROADWELL=${{ matrix.broadwell }}
       - name: Build
         run: cmake --build build -j 2
       - name: Test

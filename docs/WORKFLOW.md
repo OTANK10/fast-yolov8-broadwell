@@ -29,11 +29,15 @@ git config --global user.email "andrewid@andrew.cmu.edu"
 cd /scratch/$USER/645
 git clone git@github.com:OTANK10/fast-yolov8-broadwell.git
 cd fast-yolov8-broadwell
-git switch om/conv3x3-s1        # or: git switch -c sherlock/conv3x3-s2 / simon/sppf
+git switch -c sherlock/conv3x3-s2   # or simon/sppf; Om uses om/conv3x3-s1
 bash scripts/setup_ece007.sh
 ```
 
 If `~/.ssh` lives on AFS and you get permission errors, run `kinit && aklog` first.
+
+## Claude
+
+`CLAUDE.md` gives Claude Code the project context and rules; `.claude/commands/` adds `/check`, `/new-version` and `/explain`. In a Claude chat, paste `CLAUDE.md` and your brief from `docs/briefs/` first. See `docs/TEAM_GUIDE.md`.
 
 ## Daily loop
 

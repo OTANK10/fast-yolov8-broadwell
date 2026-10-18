@@ -5,6 +5,8 @@
 
 ## Start here (5 minutes)
 
+**Teammates: read [docs/TEAM_GUIDE.md](docs/TEAM_GUIDE.md) first**, then your brief in [docs/briefs/](docs/briefs/). Claude Code picks up the project context from [CLAUDE.md](CLAUDE.md) automatically.
+
 We are **not training YOLO**. We are rebuilding selected YOLOv8n inference operations as fast C++ kernels and measuring how efficiently they use the Intel Xeon E5-2640 v4 (Broadwell) CPU. Our source model is the **YOLOv8n** variant, not whatever newest YOLO model Ultralytics advertises.
 
 1. **One-time setup on ece007** (venv, model export, real-layer dumps, Broadwell build, tests):
@@ -45,7 +47,7 @@ Om owns **3×3, stride-1 FP32 convolution**: the 20 C2f bottleneck layers plus t
 | --- | --- | --- |
 | **Om Tank** | 3×3 stride-1 convolution (C2f bottleneck) | Correctness, SIMD/FMA register map, performance vs. reference and peak |
 | **O'Malley Sherlock** | 3×3 stride-2 convolution (downsampling) | Correctness, addressing and tiling explanation, per-layer timings |
-| **Bohan (Simon) Yu** | SPPF pooling/fused operations; investigate 1×1 | Working pooling benchmark and memory-access strategy; confirm 1×1 scope with instructor |
+| **Bohan (Simon) Yu** | 1×1 convolutions, SPPF max-pool, SiLU epilogue | Correctness, GEMM tile and L1 analysis for 1×1, pooling benchmark and memory-access strategy |
 
 Per Professor Low's feedback, folding batch norm into weights **does not itself add inference-time compute**, so that must not be presented as a standalone performance kernel. The included SPPF reference covers the pooling cascade only, not its surrounding convolution/activation layers.
 

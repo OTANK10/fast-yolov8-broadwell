@@ -9,7 +9,7 @@ __pycache__/
 *.bin
 *.npy
 *.npz
-data/models/
-data/tensors/
+data/models
+data/tensors
 data/images/
 results/raw/

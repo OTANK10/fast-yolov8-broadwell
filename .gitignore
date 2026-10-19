@@ -15,3 +15,4 @@ data/images/
 results/raw/
 *.zip
 val2017/*
+*.csv

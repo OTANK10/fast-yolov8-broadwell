@@ -13,3 +13,5 @@ data/models
 data/tensors
 data/images/
 results/raw/
+*.zip
+val2017/*

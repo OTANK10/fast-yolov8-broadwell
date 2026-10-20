@@ -3,8 +3,21 @@ import glob, os
 import numpy as np
 import cv2
 
-PEAK_FLOPS_PER_CYCLE_PER_CORE = 32.0
-NOMINAL_HZ = 2.4e9
+PEAK_FLOPS_PER_CYCLE_PER_CORE = float(os.environ.get("PEAK_FPC", 32.0))
+
+
+def _base_hz():
+    """Base (TSC) clock from the CPU name, e.g. 'Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz'."""
+    try:
+        for line in open("/proc/cpuinfo"):
+            if line.startswith("model name") and "GHz" in line:
+                return float(line.split("@")[1].strip().replace("GHz", "")) * 1e9
+    except (OSError, IndexError, ValueError):
+        pass
+    return float(os.environ.get("BASE_GHZ", 2.4)) * 1e9
+
+
+NOMINAL_HZ = _base_hz()
 
 OWNERS = {"3x3s1": "Om", "3x3s2": "O'Malley", "1x1": "Simon", "other": "-"}
 

@@ -32,7 +32,7 @@ Om's stride-1 kernel (`src/conv3x3_s1.cpp`, explained in `docs/STRIDE1_GUIDE.md`
 
 ## Your first three tasks
 
-1. Set up git and ece007 with `docs/WORKFLOW.md`, then run `scripts/run_kernels.sh s2_v1 3x3s2` to see the baseline of your current (scalar) version, and `python scripts/baseline_bench.py` for OpenCV DNN and ONNX Runtime.
+1. Set up git and ece028 with `docs/WORKFLOW.md`, then run `scripts/run_kernels.sh s2_v1 3x3s2` to see the baseline of your current (scalar) version, and `python scripts/baseline_bench.py` for OpenCV DNN and ONNX Runtime.
 2. Write `conv3x3_s2_v2` with the 2×5 tile (register it in `include/kernels.h`, `benchmarks/bench_layer.cpp`, `tests/test_kernels.cpp`). Pass `ctest`, then `scripts/run_kernels.sh s2_v2 3x3s2`.
 3. Fill in the analysis for your kernel, following the section headings of `docs/STRIDE1_GUIDE.md` (independent ops, dependency chain, functional units, peak, tile, register allocation and reuse, layout, measured % of peak and why it differs).
 

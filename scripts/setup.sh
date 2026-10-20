@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# One-time setup on ece007 (run from the repo root):   bash scripts/setup_ece007.sh
+# One-time setup on the project machine, ece028 (run from the repo root):   bash scripts/setup.sh
 # Puts the Python env, the model files and the layer dumps on /scratch (fast, no AFS
 # token or quota), and symlinks them into the repo. /scratch is NOT backed up and can be
 # purged: everything there is regenerable from this script; your code lives in git.
 set -euo pipefail
 SCR=${SCR:-/scratch/$USER/645}
+if ! mkdir -p "$SCR" 2>/dev/null; then
+  echo "Cannot create $SCR. Check that this machine has /scratch (df -h /scratch);"
+  echo "if not, rerun with a local disk path, e.g.  SCR=/tmp/$USER/645 bash scripts/setup.sh"
+  exit 1
+fi
 mkdir -p "$SCR"/{venv,models,tensors,pipcache}
 export PIP_CACHE_DIR="$SCR/pipcache"
 
@@ -24,6 +29,7 @@ mkdir -p results/raw
 
 python scripts/export_model.py --batch 1
 python scripts/dump_layers.py --batch 1
+bash scripts/machine_info.sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DYOLO_ENABLE_BROADWELL=ON
 cmake --build build -j
 ctest --test-dir build --output-on-failure

@@ -77,7 +77,7 @@ void pack_weights(const float *oihw, int K, int C, int R, int S, float *dst);
 
 /* ---- timing ---- */
 /* Timestamp counter (x86). On other CPUs (e.g. a Mac for correctness work) it falls
- * back to nanoseconds, so numbers there are NOT cycles; report only ece007 runs. */
+ * back to nanoseconds, so numbers there are NOT cycles; report only ece028 runs. */
 static inline uint64_t rdtsc(void) {
 #if defined(__x86_64__) || defined(__i386__)
     unsigned lo, hi;
@@ -89,7 +89,8 @@ static inline uint64_t rdtsc(void) {
 #endif
 }
 
-/* Broadwell-EP E5-2640 v4: 2 FMA ports x 8 FP32 lanes x 2 flops = 32 flops/cycle/core */
+/* AVX2 FP32 peak: 2 FMA ports x 8 lanes x 2 flops = 32 flops/cycle/core (any Intel core since Haswell).
+ * bench_layer uses $PEAK_FPC instead when it is set. NOMINAL_GHZ is only a fallback. */
 #define PEAK_FLOPS_PER_CYCLE_PER_CORE 32.0
 #define NOMINAL_GHZ 2.4
 

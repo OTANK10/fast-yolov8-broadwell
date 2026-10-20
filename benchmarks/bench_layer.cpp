@@ -16,7 +16,8 @@
  *   output.bin   NCHW float32, the baseline's output after SiLU (= conv_out if no SiLU)
  *
  * FLOPs/cycle uses core cycles (perf_event) for 1 thread when the kernel
- * allows it, otherwise TSC cycles (wall time at 2.4 GHz). The output says which.
+ * allows it, otherwise TSC cycles (wall time at the base clock). The output says which.
+ * Peak defaults to 32 FLOPs/cycle/core (AVX2); export PEAK_FPC=<n> to change it.
  *
  * Everything outside the kernel call (file I/O, layout conversion, weight
  * packing) is outside the timed region.
@@ -45,6 +46,12 @@ static const kernel_entry_t KERNELS[] = {
     {"generic", conv_blk_generic},
     {"s1_v0", conv3x3_s1_v0},
     {"s1_v1", conv3x3_s1_v1},
+    {"s1_v2", conv3x3_s1_v2},
+    {"s1_v3", conv3x3_s1_v3},
+    {"s1_t1x1", conv3x3_s1_t1x1}, {"s1_t1x2", conv3x3_s1_t1x2}, {"s1_t1x4", conv3x3_s1_t1x4},
+    {"s1_t1x5", conv3x3_s1_t1x5}, {"s1_t1x10", conv3x3_s1_t1x10},
+    {"s1_t2x1", conv3x3_s1_t2x1}, {"s1_t2x2", conv3x3_s1_t2x2}, {"s1_t2x4", conv3x3_s1_t2x4},
+    {"s1_t2x5", conv3x3_s1_t2x5},
     {"s2_v1", conv3x3_s2_v1},
     {"1x1_v1", conv1x1_v1},
     /* add your kernel here */
@@ -67,8 +74,8 @@ static float *read_bin(const char *dir, const char *file, size_t nfloats) {
 }
 
 /* Core clock cycles of THIS thread via perf_event (-1 if not permitted).
- * rdtsc ticks at the fixed 2.4 GHz nominal clock, but the core turbos up to
- * 3.4 GHz, so TSC "cycles" undercount real cycles by up to ~1.4x and make you
+ * rdtsc ticks at the fixed base clock, but the core turbos higher,
+ * so TSC "cycles" undercount real cycles and make you
  * look faster than peak. For single-thread runs we report core cycles. */
 static int perf_open_cycles(void) {
 #ifndef __linux__
@@ -94,7 +101,7 @@ static uint64_t perf_read(int fd) {
     return v;
 }
 
-/* Measure the TSC rate once (should print ~2.4 GHz on ece007). */
+/* Measure the TSC rate once (should match the "@ x.xxGHz" in the CPU name). */
 static double tsc_ghz(void) {
     struct timespec a{}, b{};
     clock_gettime(CLOCK_MONOTONIC, &a);
@@ -216,7 +223,9 @@ int main(int argc, char **argv) {
     double best = use_core ? (double)core[0] : (double)tsc[0];
     double med = use_core ? (double)core[reps / 2] : (double)tsc[reps / 2];
     double ghz = tsc_ghz(), secs = (double)tsc[0] / (ghz * 1e9);
-    double fpc = flops / best, pct = 100.0 * fpc / (PEAK_FLOPS_PER_CYCLE_PER_CORE * threads);
+    const char *pk = getenv("PEAK_FPC"); /* peak FLOPs/cycle/core; default 32 = AVX2 with 2 FMA units */
+    double peak_core = pk ? atof(pk) : PEAK_FLOPS_PER_CYCLE_PER_CORE;
+    double fpc = flops / best, pct = 100.0 * fpc / (peak_core * threads);
     double gflops = flops / secs / 1e9;
     const char *src = use_core ? "core" : "tsc";
 

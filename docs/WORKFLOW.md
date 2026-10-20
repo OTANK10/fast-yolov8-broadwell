@@ -15,9 +15,9 @@ sherlock/conv3x3-s2   O'Malley
 simon/sppf            Simon (SPPF, SiLU epilogue, 1x1 if we take it on)
 ```
 
-Work on your branch, push often (ece007 scratch is not backed up), open a PR into `main` when a kernel version is correct on all your layers. GitHub Actions builds and runs `ctest` on every push and PR, with and without AVX2. Keep shared-file changes out of kernel PRs.
+Work on your branch, push often (ece028 scratch is not backed up), open a PR into `main` when a kernel version is correct on all your layers. GitHub Actions builds and runs `ctest` on every push and PR, with and without AVX2. Keep shared-file changes out of kernel PRs.
 
-## First-time git setup on ece007
+## First-time git setup on ece028
 
 ```bash
 ssh-keygen -t ed25519 -C "andrewid@andrew.cmu.edu"   # accept defaults
@@ -30,7 +30,7 @@ cd /scratch/$USER/645
 git clone git@github.com:OTANK10/fast-yolov8-broadwell.git
 cd fast-yolov8-broadwell
 git switch -c sherlock/conv3x3-s2   # or simon/sppf; Om uses om/conv3x3-s1
-bash scripts/setup_ece007.sh
+bash scripts/setup.sh
 ```
 
 If `~/.ssh` lives on AFS and you get permission errors, run `kinit && aklog` first.
@@ -65,7 +65,7 @@ Keep old versions; the presentation is the story from v0 to vN.
 
 ## Measurement rules (so all three of us report comparable numbers)
 
-Build with `-DYOLO_ENABLE_BROADWELL=ON` (the setup script does). Use `bench_layer` for kernels and `baseline_bench.py` for baselines, same batch and thread count. Single-thread numbers use core cycles when the kernel lets user code read the perf counter, otherwise TSC cycles; the output says which (`core-cycles` or `tsc-cycles`). TSC ticks at 2.4 GHz but the cores turbo higher, so with TSC a single core can appear to beat its 32 FLOPs/cycle peak. If you see over 100% of peak, the cycle count is the problem, not the kernel. For multi-thread runs we report TSC cycles (wall time), which is what matters for parallel speed. Run on an otherwise idle ece007 (check `top`), pin threads (`run_kernels.sh` sets `OMP_PROC_BIND=close OMP_PLACES=cores`), and use the median over 20 reps when it differs much from the best.
+Build with `-DYOLO_ENABLE_BROADWELL=ON` (the setup script does). Use `bench_layer` for kernels and `baseline_bench.py` for baselines, same batch and thread count. Single-thread numbers use core cycles when the kernel lets user code read the perf counter, otherwise TSC cycles; the output says which (`core-cycles` or `tsc-cycles`). TSC ticks at 2.4 GHz but the cores turbo higher, so with TSC a single core can appear to beat its 32 FLOPs/cycle peak. If you see over 100% of peak, the cycle count is the problem, not the kernel. For multi-thread runs we report TSC cycles (wall time), which is what matters for parallel speed. Run on an otherwise idle ece028 (check `top`), pin threads (`run_kernels.sh` sets `OMP_PROC_BIND=close OMP_PLACES=cores`), and use the median over 20 reps when it differs much from the best.
 
 ## What goes in git
 

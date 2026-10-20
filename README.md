@@ -1,4 +1,4 @@
-# Fast YOLOv8n on Intel Broadwell
+# Fast YOLOv8n on an Intel Xeon (ece028)
 
 **CMU 18-645: How to Write Fast Code — Fall 2026**  
 **Status:** Shared harness, layouts, per-layer data dumps and baselines are in. Stride-1 has a first AVX2 kernel (v1); stride-2, 1×1 and SPPF are correct scalar fallbacks waiting for their owners.
@@ -7,13 +7,13 @@
 
 **Teammates: read [docs/TEAM_GUIDE.md](docs/TEAM_GUIDE.md) first**, then your brief in [docs/briefs/](docs/briefs/). Claude Code picks up the project context from [CLAUDE.md](CLAUDE.md) automatically.
 
-We are **not training YOLO**. We are rebuilding selected YOLOv8n inference operations as fast C++ kernels and measuring how efficiently they use the Intel Xeon E5-2640 v4 (Broadwell) CPU. Our source model is the **YOLOv8n** variant, not whatever newest YOLO model Ultralytics advertises.
+We are **not training YOLO**. We are rebuilding selected YOLOv8n inference operations as fast C++ kernels and measuring how efficiently they use the Intel Xeon CPU of ece028. (We started on ece007, a Broadwell E5-2640 v4, and moved to ece028 on Oct 20; the repo name still says "broadwell".) Our source model is the **YOLOv8n** variant, not whatever newest YOLO model Ultralytics advertises.
 
-1. **One-time setup on ece007** (venv, model export, real-layer dumps, Broadwell build, tests):
+1. **One-time setup on ece028** (venv, model export, real-layer dumps, Broadwell build, tests):
 
    ```sh
    cd /scratch/$USER/645 && git clone git@github.com:OTANK10/fast-yolov8-broadwell.git
-   cd fast-yolov8-broadwell && bash scripts/setup_ece007.sh
+   cd fast-yolov8-broadwell && bash scripts/setup.sh
    source /scratch/$USER/645/venv/bin/activate      # every new shell
    ```
 
@@ -29,17 +29,17 @@ We are **not training YOLO**. We are rebuilding selected YOLOv8n inference opera
    python scripts/plot_results.py results/s1_v1_b1_t1.csv results/baseline_b1_t1.csv
    ```
 
-   Kernel names: `s1_v0`, `s1_v1` (Om), `s2_v1` (O'Malley), `1x1_v1`, plus `generic` and `ref`. Kinds for `run_kernels.sh`: `3x3s1`, `3x3s2`, `1x1`.
+   Kernel names: `s1_v0`..`s1_v3` and `s1_t<KB>x<OW>` (Om), `s2_v1` (O'Malley), `1x1_v1`, plus `generic` and `ref`. Kinds for `run_kernels.sh`: `3x3s1`, `3x3s2`, `1x1`.
 
 3. **Branches:** `om/conv3x3-s1`, `sherlock/conv3x3-s2`, `simon/sppf`. Open pull requests for shared changes. Git setup and rules: [docs/WORKFLOW.md](docs/WORKFLOW.md).
 
-4. **Correctness anywhere, performance on ece007.** Without `-DYOLO_ENABLE_BROADWELL=ON` (e.g. on a Mac) the AVX2 kernels fall back to scalar code so everything still builds and tests pass, but only ece007 numbers go in the report.
+4. **Correctness anywhere, performance on ece028.** Without `-DYOLO_ENABLE_BROADWELL=ON` (e.g. on a Mac) the AVX2 kernels fall back to scalar code so everything still builds and tests pass, but only ece028 numbers go in the report.
 
 ### What Om is doing
 
 Om owns **3×3, stride-1 FP32 convolution**: the 20 C2f bottleneck layers plus the 12 stride-1 layers in the Detect head, which the same kernel handles (32 layers, 66% of the model's FLOPs). Design notes: [docs/STRIDE1_GUIDE.md](docs/STRIDE1_GUIDE.md).
 
-**Current state:** `s1_v0` (scalar, blocked layout) and `s1_v1` (AVX2 2×5 register-blocked microkernel, 10 FMA accumulators, OpenMP) pass on all 32 real layers against the baseline outputs. Not yet measured on ece007; next are cache blocking over input channels, thread scaling and NUMA.
+**Current state:** a staircase of versions, each removing one bottleneck: `s1_v0` scalar, `s1_v1` AVX2 with 1 accumulator, `s1_v2` 2×5 register tile (10 accumulators, 1 core), `s1_v3` v2 + OpenMP, plus a tile-shape sweep (`scripts/tile_sweep.sh`). All pass on all 32 real layers. Not yet measured on ece028.
 
 ## Who owns what
 
@@ -56,9 +56,9 @@ Per Professor Low's feedback, folding batch norm into weights **does not itself 
 Model: pretrained **Ultralytics YOLOv8n**, exported to ONNX at image size 640.  
 Primary baseline: **OpenCV DNN** (as specified in the proposal).  
 Secondary reference: **ONNX Runtime CPU**.  
-Target platform: **Intel Xeon E5-2640 v4**, 2 sockets × 10 physical cores, AVX2/FMA, 16 YMM registers, 32 KB L1D/core, 256 KB L2/core, 25 MB L3/socket.
+Target platform: **ece028**, an Intel Xeon. Run `bash scripts/machine_info.sh` on it for the exact model, sockets, cores and cache sizes (TODO: paste them here). Our kernels use AVX2 + FMA: 16 YMM registers of 8 FP32 lanes.
 
-For 32-bit FMA, Broadwell's advertised **per-core compute peak is 32 FP32 FLOPs/cycle** (two 256-bit FMA instructions per cycle × eight lanes × two FLOPs per fused multiply-add). Actual sustained rate may be lower due to dependencies, loads, addresses, issue limits, and cache effects. The 5-cycle FMA latency suggests ~10 independent accumulator chains are required to sustain peak FMA throughput, subject to other resource constraints.
+For 32-bit FMA with AVX2, the **per-core compute peak is 32 FP32 FLOPs/cycle** (two 256-bit FMA instructions per cycle × eight lanes × two FLOPs per fused multiply-add). Actual sustained rate may be lower due to dependencies, loads, addresses, issue limits, and cache effects. The 5-cycle FMA latency suggests ~10 independent accumulator chains are required to sustain peak FMA throughput, subject to other resource constraints.
 
 For each real layer shape, report: tensor shapes, validation error (absolute **and** relative tolerance), median time/cycles, operation count, FLOPs/cycle, % of relevant theoretical peak, baseline timing, compiler options, thread count, and conversion/copy costs when relevant. The toy benchmark provided here is **only a smoke test**, not a scientifically controlled result.
 
@@ -96,7 +96,7 @@ include/       common.h (layouts, conv_desc_t, signature, timing), epilogue.h (A
 src/           layout.cpp, reference_conv.cpp (never optimize), one file per owner's kernel
 benchmarks/    bench_layer.cpp: real-layer correctness (max rel err <= 1e-4) + cycles, FLOPs/cycle, % peak
 tests/         Random-data correctness of every kernel on yolov8n channel counts (runs in CI)
-scripts/       export_model, dump_layers, baseline_bench, run_kernels, plot_results, setup_ece007, fetch_coco_val
+scripts/       export_model, dump_layers, baseline_bench, run_kernels, plot_results, setup_ece028, fetch_coco_val
 data/          models/ and tensors/ (symlinks to scratch, ignored by Git)
 results/       Tables/plots and documented configs (not raw giant dumps)
 docs/milestone/ Presentation and report work
@@ -106,7 +106,7 @@ docs/          WORKFLOW.md, STRIDE1_GUIDE.md, LAYERS.md
 
 ## Developer commands
 
-On Broadwell (or any x86 CPU with AVX2/FMA) pass `-DYOLO_ENABLE_BROADWELL=ON`; this is what turns on the fast kernels:
+On ece028 (or any x86 CPU with AVX2/FMA) pass `-DYOLO_ENABLE_BROADWELL=ON`; this is what turns on the fast kernels. The name is historical: `-march=broadwell` emits AVX2 + FMA code, which runs on every newer Intel Xeon:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DYOLO_ENABLE_BROADWELL=ON
@@ -121,7 +121,7 @@ Do **not** enable Broadwell targeting on Apple Silicon. Do not use `-ffast-math`
 
 - Optimized stride-2 (`src/conv3x3_s2.cpp`), 1×1 (`src/conv1x1.cpp`) and SPPF max-pool kernels; each currently forwards to a correct scalar version.
 - SPPF entry in `bench_layer` (the MaxPool tensors are already dumped).
-- Cache blocking, NUMA-aware first-touch and thread-scaling study for 20 cores.
+- Cache blocking, NUMA-aware first-touch and thread-scaling study across all of ece028's cores.
 - Cross-layer fusion: Bottleneck residual add in the epilogue, free C2f Split/Concat in NCHW8c.
 - Batch 16 dumps from COCO val (`scripts/fetch_coco_val.sh`, then `dump_layers.py --batch 16 --only 3x3s1`).
 

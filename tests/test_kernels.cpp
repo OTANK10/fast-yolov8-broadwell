@@ -94,8 +94,15 @@ int main() {
     for (auto s : s1) {
         worst = std::fmax(worst, check_kernel("s1_v0", conv3x3_s1_v0, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
         worst = std::fmax(worst, check_kernel("s1_v1", conv3x3_s1_v1, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v2", conv3x3_s1_v2, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v3", conv3x3_s1_v3, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
     }
-    worst = std::fmax(worst, check_kernel("s1_v1", conv3x3_s1_v1, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
+    worst = std::fmax(worst, check_kernel("s1_v3", conv3x3_s1_v3, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
+    {   // every sweep tile on one shape where all of them apply (K/8 = 4, width 20)
+        conv_fn_t tiles[] = {conv3x3_s1_t1x1, conv3x3_s1_t1x2, conv3x3_s1_t1x4, conv3x3_s1_t1x5, conv3x3_s1_t1x10,
+                             conv3x3_s1_t2x1, conv3x3_s1_t2x2, conv3x3_s1_t2x4, conv3x3_s1_t2x5};
+        for (conv_fn_t t : tiles) worst = std::fmax(worst, check_kernel("s1_tile", t, make_desc(1, 32, 20, 20, 32, 3, 1, 1), rng));
+    }
     struct { int C, K, H; } s2[] = {{3, 16, 20}, {16, 32, 20}, {64, 128, 10}, {128, 256, 10}};
     for (auto s : s2) worst = std::fmax(worst, check_kernel("s2_v1", conv3x3_s2_v1, make_desc(1, s.C, s.H, s.H, s.K, 3, 2, 1), rng));
     struct { int C, K, H; } k1[] = {{32, 32, 20}, {48, 32, 20}, {384, 256, 5}, {64, 64, 10}};

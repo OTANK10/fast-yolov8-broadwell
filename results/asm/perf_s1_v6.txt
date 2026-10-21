@@ -1,0 +1,12 @@
+         568703463      uops_issued.any:u                                             (58.23%)
+         299948691      idq.dsb_uops:u                                                (58.22%)
+         203254820      idq.mite_uops:u                                               (58.22%)
+            513272      lsd.uops:u                                                    (57.73%)
+          37914521      idq.ms_uops:u                                                 (57.16%)
+
+       0.091421373 seconds time elapsed
+
+       0.085882000 seconds user
+       0.004941000 seconds sys
+
+

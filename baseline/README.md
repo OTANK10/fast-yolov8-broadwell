@@ -40,7 +40,7 @@ Because the image is already 640x640, no resizing or padding happens.
 
 | Measurement | Forward pass |
 | --- | --- |
-| `bench_layers.py --no-winograd` (direct 3x3 conv) | 172.4 ms |
+| `bench_layers.py --no-winograd` (direct 3x3 conv) | 173.6 ms |
 | `infer.py --bench 20` (OpenCV default, Winograd on) | 181.2 ms mean, 180.5 median, 172.1 min |
 
 - Work: 4.37 G multiply-adds = 8.74 GFLOP per image; 64 convs (3x3 s1 66%, 1x1 19%, 3x3 s2 15% of MACs)
@@ -50,21 +50,23 @@ Because the image is already 640x640, no resizing or padding happens.
 ## Per-layer benchmark (OpenCV, 1 thread, direct conv)
 
 Winograd off, mean of 20 runs after 3 warmup, `bus640.png`.
-**Forward 172.4 ms, 50.7 GFLOP/s overall; convs alone 155.3 ms at 56.3 GFLOP/s.**
+**Forward 173.6 ms, 50.4 GFLOP/s overall; convs alone 156.1 ms at 56.0 GFLOP/s.**
 
 By kernel type:
 
 | Kind | Count | ms | % of time | G MACs | GFLOP/s |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Conv (all) | 64 | 155.31 | 90.1% | 4.372 | 56.3 |
-| Layout transform | 45 | 6.53 | 3.8% | – | – |
-| Concat | 17 | 3.79 | 2.2% | – | – |
-| Transpose | 2 | 1.89 | 1.1% | – | – |
-| Softmax | 1 | 1.51 | 0.9% | – | – |
-| Resize | 2 | 0.81 | 0.5% | – | – |
-| Split | 8 | 0.77 | 0.4% | – | – |
-| Sigmoid | 1 | 0.68 | 0.4% | – | – |
-| MaxPool | 3 | 0.63 | 0.4% | – | – |
+| Conv 3x3 s1 | 32 | 87.65 | 50.5% | 2.902 | 66.2 |
+| Conv 3x3 s2 | 7 | 35.87 | 20.7% | 0.634 | 35.3 |
+| Conv 1x1 s1 | 25 | 32.59 | 18.8% | 0.836 | 51.3 |
+| Layout transform | 45 | 6.72 | 3.9% | – | – |
+| Concat | 17 | 3.87 | 2.2% | – | – |
+| Transpose | 2 | 1.94 | 1.1% | – | – |
+| Softmax | 1 | 1.55 | 0.9% | – | – |
+| Resize | 2 | 0.83 | 0.5% | – | – |
+| Split | 8 | 0.78 | 0.4% | – | – |
+| Sigmoid | 1 | 0.70 | 0.4% | – | – |
+| MaxPool | 3 | 0.65 | 0.4% | – | – |
 | Add | 8 | 0.42 | 0.2% | – | – |
 | Other (Mul, Sub, Slice, Div, Reshape) | 14 | 0.07 | 0.0% | – | – |
 
@@ -72,58 +74,58 @@ By block:
 
 | Block | Role | ms | % of time | G MACs | GFLOP/s |
 | --- | --- | ---: | ---: | ---: | ---: |
-| layout transforms | OpenCV overhead | 6.53 | 3.8% | – | – |
-| model.0 | Conv 3x3 s2 | 6.99 | 4.1% | 0.044 | 12.7 |
-| model.1 | Conv 3x3 s2 | 5.61 | 3.3% | 0.118 | 42.1 |
-| model.2 | C2f | 11.04 | 6.4% | 0.184 | 33.2 |
-| model.3 | Conv 3x3 s2 | 5.02 | 2.9% | 0.118 | 47.0 |
-| model.4 | C2f | 14.44 | 8.4% | 0.315 | 43.6 |
-| model.5 | Conv 3x3 s2 | 5.58 | 3.2% | 0.118 | 42.3 |
-| model.6 | C2f | 9.39 | 5.4% | 0.315 | 67.0 |
-| model.7 | Conv 3x3 s2 | 6.46 | 3.7% | 0.118 | 36.5 |
-| model.8 | C2f | 5.95 | 3.5% | 0.184 | 61.7 |
-| model.9 | SPPF | 3.61 | 2.1% | 0.066 | 36.3 |
-| model.10–11 | Upsample + concat | 0.51 | 0.3% | – | – |
-| model.12 | C2f | 7.81 | 4.5% | 0.236 | 60.4 |
-| model.13–14 | Upsample + concat | 1.22 | 0.7% | – | – |
-| model.15 | C2f | 9.40 | 5.5% | 0.236 | 50.2 |
-| model.16–17 | Conv 3x3 s2 + concat | 2.89 | 1.7% | 0.059 | 40.8 |
-| model.18 | C2f | 5.61 | 3.3% | 0.197 | 70.1 |
-| model.19–20 | Conv 3x3 s2 + concat | 3.25 | 1.9% | 0.059 | 36.3 |
-| model.21 | C2f | 6.63 | 3.8% | 0.197 | 59.3 |
-| model.22 | Detect head + decode | 54.45 | 31.6% | 1.811 | 66.5 |
+| layout transforms | OpenCV overhead | 6.72 | 3.9% | – | – |
+| model.0 | Conv 3x3 s2 | 7.08 | 4.1% | 0.044 | 12.5 |
+| model.1 | Conv 3x3 s2 | 5.63 | 3.2% | 0.118 | 41.9 |
+| model.2 | C2f | 11.19 | 6.4% | 0.184 | 32.8 |
+| model.3 | Conv 3x3 s2 | 5.03 | 2.9% | 0.118 | 46.9 |
+| model.4 | C2f | 14.44 | 8.3% | 0.315 | 43.6 |
+| model.5 | Conv 3x3 s2 | 5.55 | 3.2% | 0.118 | 42.5 |
+| model.6 | C2f | 9.15 | 5.3% | 0.315 | 68.8 |
+| model.7 | Conv 3x3 s2 | 6.47 | 3.7% | 0.118 | 36.5 |
+| model.8 | C2f | 5.87 | 3.4% | 0.184 | 62.5 |
+| model.9 | SPPF | 3.58 | 2.1% | 0.066 | 36.6 |
+| model.10–11 | Upsample + concat | 0.53 | 0.3% | – | – |
+| model.12 | C2f | 7.85 | 4.5% | 0.236 | 60.1 |
+| model.13–14 | Upsample + concat | 1.25 | 0.7% | – | – |
+| model.15 | C2f | 9.86 | 5.7% | 0.236 | 47.9 |
+| model.16–17 | Conv 3x3 s2 + concat | 2.93 | 1.7% | 0.059 | 40.3 |
+| model.18 | C2f | 5.62 | 3.2% | 0.197 | 70.0 |
+| model.19–20 | Conv 3x3 s2 + concat | 3.30 | 1.9% | 0.059 | 35.7 |
+| model.21 | C2f | 6.76 | 3.9% | 0.197 | 58.2 |
+| model.22 | Detect head + decode | 54.83 | 31.6% | 1.811 | 66.1 |
 
 Top 20 layers by time:
 
 | # | Layer | Kind | Out C×H×W | ms | % | M MACs | GFLOP/s |
 | ---: | --- | --- | --- | ---: | ---: | ---: | ---: |
 | 95 | `/model.22/cv3.0/cv3.0.1/conv/Conv` | Conv 3x3 s1, 80→80 | 80×80×80 | 10.01 | 5.8% | 369 | 73.7 |
-| 92 | `/model.22/cv3.0/cv3.0.0/conv/Conv` | Conv 3x3 s1, 64→80 | 80×80×80 | 8.07 | 4.7% | 295 | 73.1 |
-| 1 | `/model.0/conv/Conv` | Conv 3x3 s2, 3→16 | 16×320×320 | 6.99 | 4.1% | 44 | 12.7 |
-| 91 | `/model.22/cv2.0/cv2.0.0/conv/Conv` | Conv 3x3 s1, 64→64 | 64×80×80 | 6.51 | 3.8% | 236 | 72.5 |
-| 48 | `/model.7/conv/Conv` | Conv 3x3 s2, 128→256 | 256×20×20 | 6.46 | 3.7% | 118 | 36.5 |
-| 94 | `/model.22/cv2.0/cv2.0.1/conv/Conv` | Conv 3x3 s1, 64→64 | 64×80×80 | 6.43 | 3.7% | 236 | 73.4 |
-| 2 | `/model.1/conv/Conv` | Conv 3x3 s2, 16→32 | 32×160×160 | 5.61 | 3.3% | 118 | 42.1 |
-| 31 | `/model.5/conv/Conv` | Conv 3x3 s2, 64→128 | 128×40×40 | 5.58 | 3.2% | 118 | 42.3 |
-| 14 | `/model.3/conv/Conv` | Conv 3x3 s2, 32→64 | 64×80×80 | 5.02 | 2.9% | 118 | 47.0 |
-| 114 | `/model.22/cv3.1/cv3.1.0/conv/Conv` | Conv 3x3 s1, 128→80 | 80×40×40 | 3.99 | 2.3% | 147 | 73.9 |
-| 68 | `/model.12/cv1/conv/Conv` | Conv 1x1 s1, 384→128 | 128×40×40 | 3.35 | 1.9% | 79 | 47.0 |
-| 112 | `/model.19/conv/Conv` | Conv 3x3 s2, 128→128 | 128×20×20 | 3.21 | 1.9% | 59 | 36.7 |
-| 113 | `/model.22/cv2.1/cv2.1.0/conv/Conv` | Conv 3x3 s1, 128→64 | 64×40×40 | 3.19 | 1.9% | 118 | 74.0 |
-| 0 | `trlayout.0` | Layout transform | – | 2.89 | 1.7% | – | – |
-| 90 | `/model.16/conv/Conv` | Conv 3x3 s2, 64→64 | 64×40×40 | 2.82 | 1.6% | 59 | 41.8 |
-| 7 | `/model.2/m.0/cv1/conv/Conv` | Conv 3x3 s1, 16→16 | 16×160×160 | 2.78 | 1.6% | 59 | 42.4 |
-| 8 | `/model.2/m.0/cv2/conv/Conv` | Conv 3x3 s1, 16→16 | 16×160×160 | 2.77 | 1.6% | 59 | 42.6 |
-| 19 | `/model.4/m.0/cv1/conv/Conv` | Conv 3x3 s1, 32→32 | 32×80×80 | 2.72 | 1.6% | 59 | 43.4 |
-| 20 | `/model.4/m.0/cv2/conv/Conv` | Conv 3x3 s1, 32→32 | 32×80×80 | 2.71 | 1.6% | 59 | 43.5 |
+| 92 | `/model.22/cv3.0/cv3.0.0/conv/Conv` | Conv 3x3 s1, 64→80 | 80×80×80 | 8.21 | 4.7% | 295 | 71.8 |
+| 1 | `/model.0/conv/Conv` | Conv 3x3 s2, 3→16 | 16×320×320 | 7.08 | 4.1% | 44 | 12.5 |
+| 91 | `/model.22/cv2.0/cv2.0.0/conv/Conv` | Conv 3x3 s1, 64→64 | 64×80×80 | 6.48 | 3.7% | 236 | 72.8 |
+| 48 | `/model.7/conv/Conv` | Conv 3x3 s2, 128→256 | 256×20×20 | 6.47 | 3.7% | 118 | 36.5 |
+| 94 | `/model.22/cv2.0/cv2.0.1/conv/Conv` | Conv 3x3 s1, 64→64 | 64×80×80 | 6.47 | 3.7% | 236 | 72.9 |
+| 2 | `/model.1/conv/Conv` | Conv 3x3 s2, 16→32 | 32×160×160 | 5.63 | 3.2% | 118 | 41.9 |
+| 31 | `/model.5/conv/Conv` | Conv 3x3 s2, 64→128 | 128×40×40 | 5.55 | 3.2% | 118 | 42.5 |
+| 14 | `/model.3/conv/Conv` | Conv 3x3 s2, 32→64 | 64×80×80 | 5.03 | 2.9% | 118 | 46.9 |
+| 114 | `/model.22/cv3.1/cv3.1.0/conv/Conv` | Conv 3x3 s1, 128→80 | 80×40×40 | 4.00 | 2.3% | 147 | 73.7 |
+| 68 | `/model.12/cv1/conv/Conv` | Conv 1x1 s1, 384→128 | 128×40×40 | 3.39 | 2.0% | 79 | 46.4 |
+| 112 | `/model.19/conv/Conv` | Conv 3x3 s2, 128→128 | 128×20×20 | 3.26 | 1.9% | 59 | 36.2 |
+| 113 | `/model.22/cv2.1/cv2.1.0/conv/Conv` | Conv 3x3 s1, 128→64 | 64×40×40 | 3.21 | 1.8% | 118 | 73.5 |
+| 0 | `trlayout.0` | Layout transform | – | 2.97 | 1.7% | – | – |
+| 90 | `/model.16/conv/Conv` | Conv 3x3 s2, 64→64 | 64×40×40 | 2.85 | 1.6% | 59 | 41.4 |
+| 8 | `/model.2/m.0/cv2/conv/Conv` | Conv 3x3 s1, 16→16 | 16×160×160 | 2.82 | 1.6% | 59 | 41.8 |
+| 7 | `/model.2/m.0/cv1/conv/Conv` | Conv 3x3 s1, 16→16 | 16×160×160 | 2.81 | 1.6% | 59 | 42.0 |
+| 84 | `/model.15/m.0/cv1/conv/Conv` | Conv 3x3 s1, 32→32 | 32×80×80 | 2.74 | 1.6% | 59 | 43.1 |
 | 24 | `/model.4/m.1/cv1/conv/Conv` | Conv 3x3 s1, 32→32 | 32×80×80 | 2.71 | 1.6% | 59 | 43.5 |
+| 25 | `/model.4/m.1/cv2/conv/Conv` | Conv 3x3 s1, 32→32 | 32×80×80 | 2.71 | 1.6% | 59 | 43.5 |
 
 Takeaways:
 
-- **Wide 3x3 stride-1 convs (64–128 channels) reach ~73 GFLOP/s**, OpenCV's best case. They are mostly in the P3 head, which alone is ~28% of the time.
-- **Stride-2 convs and narrow 3x3s (16–32 channels) reach only 36–47 GFLOP/s**, about half that. These are the easiest wins.
-- **The first conv (3→16 channels) runs at 12.7 GFLOP/s**, the worst layer: 3 input channels can't fill 8-wide AVX2 registers. It needs its own kernel.
-- **~17 ms (10%) is not conv**: 6.5 ms of layout transforms plus concat, transpose and softmax. A single-layout pipeline avoids most of it.
+- **Wide 3x3 stride-1 convs (64–128 channels) reach 72–74 GFLOP/s**, OpenCV's best case. The four big P3-head convs alone take 31 ms (18%).
+- **Stride-2 convs are the weakest conv class at 35 GFLOP/s**: 21% of the time for 15% of the MACs. Narrow 3x3s (16–32 channels) and 1x1s also sit at 42–51 GFLOP/s. These are the easiest wins.
+- **The first conv (3→16 channels) runs at 12.5 GFLOP/s**, the worst layer: 3 input channels can't fill 8-wide AVX2 registers. It needs its own kernel.
+- **17.5 ms (10%) is not conv**: 6.7 ms of layout transforms plus concat, transpose and softmax. A single-layout pipeline avoids most of it.
 
 ## Environment setup (RHEL 8.10, no sudo)
 

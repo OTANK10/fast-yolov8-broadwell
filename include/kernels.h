@@ -28,6 +28,11 @@ FASTYOLO_CONV_DECL(conv3x3_s1_v3)   // v2 + OpenMP
 FASTYOLO_CONV_DECL(conv3x3_s1_v4)   // 2x6 tile, 12 accumulators, 6+2 row tail, 1 core
 FASTYOLO_CONV_DECL(conv3x3_s1_v4b)  // same, 4+4 row tail
 FASTYOLO_CONV_DECL(conv3x3_s1_v5)   // v4 + weights in microkernel order (needs pack_weights_s1_kb2)
+FASTYOLO_CONV_DECL(conv3x3_s1_v6)   // 2x5, all 9 taps unrolled (constant offsets), 1 core
+FASTYOLO_CONV_DECL(conv3x3_s1_v6b)  // 2x5, s unrolled, loop over r, 1 core
+FASTYOLO_CONV_DECL(conv3x3_s1_v7)   // v6 + software-pipelined loads, 1 core
+FASTYOLO_CONV_DECL(conv3x3_s1_v7b)  // v6b + software-pipelined loads, 1 core
+FASTYOLO_CONV_DECL(conv3x3_s1_v7mt) // v7 + OpenMP
 // Weight packer for v5: [Kb/2][Cb][3][3][8 ic][2][8 oc]. Same size as pack_weights.
 void pack_weights_s1_kb2(const float *oihw, int K, int C, int R, int S, float *dst);
 typedef void (*pack_fn_t)(const float *oihw, int K, int C, int R, int S, float *dst);

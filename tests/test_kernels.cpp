@@ -97,6 +97,11 @@ int main() {
         worst = std::fmax(worst, check_kernel("s1_v1", conv3x3_s1_v1, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
         worst = std::fmax(worst, check_kernel("s1_v2", conv3x3_s1_v2, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
         worst = std::fmax(worst, check_kernel("s1_v3", conv3x3_s1_v3, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v6", conv3x3_s1_v6, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v6b", conv3x3_s1_v6b, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v7", conv3x3_s1_v7, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v7b", conv3x3_s1_v7b, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v7mt", conv3x3_s1_v7mt, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
     }
     // v4/v4b/v5 tails: widths that leave 0, 1, 2, 3, 4 and 5 pixels after the 6-wide tiles
     for (int Wd : {6, 7, 8, 9, 10, 11, 20, 40})
@@ -108,6 +113,8 @@ int main() {
     worst = std::fmax(worst, check_kernel("s1_v5", conv3x3_s1_v5, make_desc(1, 256, 10, 10, 80, 3, 1, 1), rng, pack_weights_s1_kb2));
     worst = std::fmax(worst, check_kernel("s1_v5", conv3x3_s1_v5, make_desc(2, 32, 8, 8, 16, 3, 1, 0), rng, pack_weights_s1_kb2));
     worst = std::fmax(worst, check_kernel("s1_v3", conv3x3_s1_v3, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
+    worst = std::fmax(worst, check_kernel("s1_v7", conv3x3_s1_v7, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
+    worst = std::fmax(worst, check_kernel("s1_v7mt", conv3x3_s1_v7mt, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
     {   // every sweep tile on one shape where all of them apply (K/8 = 4, width 20)
         conv_fn_t tiles[] = {conv3x3_s1_t1x1, conv3x3_s1_t1x2, conv3x3_s1_t1x4, conv3x3_s1_t1x5, conv3x3_s1_t1x10,
                              conv3x3_s1_t2x1, conv3x3_s1_t2x2, conv3x3_s1_t2x4, conv3x3_s1_t2x5};

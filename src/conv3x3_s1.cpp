@@ -20,12 +20,19 @@
  *       with zero slack). No width is a multiple of 6, so each row ends in a
  *       tail of smaller tiles. v4b: the 4+4 tail variant.
  *   v5  v4 + weights packed in the microkernel's reading order (one stream).
+ *   v6  v2's 2x5 tile, all 9 taps unrolled: every load is [base + constant],
+ *       no per-tap pointer math or branch competing with the FMAs. v6b
+ *       unrolls only s (smaller loop body, fits the uop cache).
+ *   v7  v6 + software pipelining: step ci+1's weight loads issue before step
+ *       ci's FMAs (15 registers). v7b = v6b + the same. v7mt = v7 on all cores.
  *
  *   s1_t<KB>x<OW>  the same microkernel with other tile shapes, single thread,
  *       for the "how many accumulators do I need?" experiment
  *       (scripts/tile_sweep.sh). v1 is t1x1 and v2 is t2x5.
  *
  * Next: cache-block the input-channel loop for the C = 256 head layers.
+ * Every version is the same algorithm and FLOP count; only the instruction
+ * stream changes, so differences are purely microkernel quality.
  */
 #include <cstdio>
 #include <cstdlib>
@@ -241,7 +248,143 @@ static void conv3x3_s1_rowtail(const conv_desc_t *d, const float *in, const floa
             }
 }
 
+/* ----------------------------------------------- v6/v7: tuned microkernel ---- */
+/*
+ * Same 2x5 tile, same layouts, same FLOPs as v2. What changes is the
+ * instruction stream inside the microkernel:
+ *
+ *   UT    taps unrolled. v2 runs the 3x3 (r, s) taps as two real loops, so each
+ *         tap pays pointer arithmetic (r*Wp + s), a compare and a branch, and
+ *         those integer uops compete with the FMAs for ports 0/1 and for
+ *         scheduler entries. UT = 3 unrolls s (loop over r only); UT = 9
+ *         unrolls all nine taps, so every load is [base + constant] from three
+ *         row pointers set once per input-channel block. The 8 input channels
+ *         are always unrolled (as in v2).
+ *   PIPE  software pipelining. The 2 weight vectors for step ci+1 are loaded
+ *         BEFORE the FMAs of step ci, so their load latency overlaps this
+ *         step's work instead of sitting in front of the next step's FMAs.
+ *         Costs 2 registers: 10 acc + 2x2 weights + 1 broadcast = 15. (Also
+ *         double-buffering the broadcast needs all 16, and GCC 8 then spills
+ *         accumulators to the stack, which is slower; checked in the asm.)
+ *
+ * The weight pointer walks the team layout front to back: for one output
+ * block, the (cb, r, s, ci) steps are contiguous 8-float vectors, so every
+ * weight address is wcb + constant.
+ */
+template <int UT, bool PIPE>
+static inline __attribute__((always_inline)) void
+ukr_2x5_tuned(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+              const float *b, float *o, size_t o_kb, int fuse_silu) {
+    static_assert(UT == 3 || UT == 9, "UT = taps unrolled: 3 (s) or 9 (r and s)");
+    constexpr int OW = 5;
+    const __m256 b0 = _mm256_loadu_ps(b), b1 = _mm256_loadu_ps(b + CB);
+    __m256 a00 = b0, a01 = b0, a02 = b0, a03 = b0, a04 = b0; /* block kb   */
+    __m256 a10 = b1, a11 = b1, a12 = b1, a13 = b1, a14 = b1; /* block kb+1 */
+
+    /* one (tap, ci) step: 2 weight loads, 5 broadcasts, 10 FMAs */
+#define S1_FMA2(X, J) a0##J = _mm256_fmadd_ps(X, w0, a0##J); a1##J = _mm256_fmadd_ps(X, w1, a1##J);
+    for (int cb = 0; cb < Cb; cb++) {
+        const float *icb = ip + (size_t)cb * in_plane;
+        const float *wa = w + (size_t)cb * 9 * CB * CB, *wb = wa + w_kb;
+        for (int t0 = 0; t0 < 9; t0 += UT) {
+#pragma GCC unroll 9
+            for (int tt = 0; tt < UT; tt++) {
+                const int tap = t0 + tt, r = tap / 3, s = tap % 3;
+                const float *row = icb + (size_t)r * in_row + s * CB; /* pixel (oh+r, ow+s) */
+                const float *wta = wa + tap * CB * CB, *wtb = wb + tap * CB * CB;
+                if (!PIPE) {
+#pragma GCC unroll 8
+                    for (int ci = 0; ci < CB; ci++) {
+                        const __m256 w0 = _mm256_load_ps(wta + ci * CB), w1 = _mm256_load_ps(wtb + ci * CB);
+                        __m256 x;
+                        x = _mm256_broadcast_ss(row + 0 * CB + ci); S1_FMA2(x, 0)
+                        x = _mm256_broadcast_ss(row + 1 * CB + ci); S1_FMA2(x, 1)
+                        x = _mm256_broadcast_ss(row + 2 * CB + ci); S1_FMA2(x, 2)
+                        x = _mm256_broadcast_ss(row + 3 * CB + ci); S1_FMA2(x, 3)
+                        x = _mm256_broadcast_ss(row + 4 * CB + ci); S1_FMA2(x, 4)
+                    }
+                } else {
+                    /* prologue: weights for ci = 0 */
+                    __m256 w0 = _mm256_load_ps(wta), w1 = _mm256_load_ps(wtb);
+#pragma GCC unroll 8
+                    for (int ci = 0; ci < CB; ci++) {
+                        __m256 n0 = w0, n1 = w1, x;
+                        if (ci + 1 < CB) { /* next step's weights go in before this step's FMAs */
+                            n0 = _mm256_load_ps(wta + (ci + 1) * CB);
+                            n1 = _mm256_load_ps(wtb + (ci + 1) * CB);
+                        }
+                        x = _mm256_broadcast_ss(row + 0 * CB + ci); S1_FMA2(x, 0)
+                        x = _mm256_broadcast_ss(row + 1 * CB + ci); S1_FMA2(x, 1)
+                        x = _mm256_broadcast_ss(row + 2 * CB + ci); S1_FMA2(x, 2)
+                        x = _mm256_broadcast_ss(row + 3 * CB + ci); S1_FMA2(x, 3)
+                        x = _mm256_broadcast_ss(row + 4 * CB + ci); S1_FMA2(x, 4)
+                        w0 = n0; w1 = n1;
+                    }
+                }
+            }
+        }
+    }
+#undef S1_FMA2
+    (void)OW;
+    _mm256_store_ps(o + 0 * CB, epilogue_ps(a00, fuse_silu));
+    _mm256_store_ps(o + 1 * CB, epilogue_ps(a01, fuse_silu));
+    _mm256_store_ps(o + 2 * CB, epilogue_ps(a02, fuse_silu));
+    _mm256_store_ps(o + 3 * CB, epilogue_ps(a03, fuse_silu));
+    _mm256_store_ps(o + 4 * CB, epilogue_ps(a04, fuse_silu));
+    _mm256_store_ps(o + o_kb + 0 * CB, epilogue_ps(a10, fuse_silu));
+    _mm256_store_ps(o + o_kb + 1 * CB, epilogue_ps(a11, fuse_silu));
+    _mm256_store_ps(o + o_kb + 2 * CB, epilogue_ps(a12, fuse_silu));
+    _mm256_store_ps(o + o_kb + 3 * CB, epilogue_ps(a13, fuse_silu));
+    _mm256_store_ps(o + o_kb + 4 * CB, epilogue_ps(a14, fuse_silu));
+}
+
+/* Driver: identical to conv3x3_s1_tiled<2, 5> except for the microkernel. */
+template <int UT, bool PIPE>
+static void conv3x3_s1_tuned(const conv_desc_t *d, const float *in, const float *wp,
+                             const float *bias, float *out, bool threads) {
+    const int Cb = ceil_div(d->C, CB), Kb = ceil_div(d->K, CB);
+    if (d->R != 3 || d->S != 3 || d->stride != 1 || d->in_halo != d->pad || Kb % 2 != 0 || d->OW % 5 != 0) {
+        static bool warned = false;
+        if (!warned) { warned = true; std::fprintf(stderr, "conv3x3_s1 tuned: shape not supported, using generic\n"); }
+        conv_blk_generic(d, in, wp, bias, out);
+        return;
+    }
+    const int Hp = d->H + 2 * d->in_halo, Wp = d->W + 2 * d->in_halo;
+    const int OHp = d->OH + 2 * d->out_halo, OWp = d->OW + 2 * d->out_halo;
+    const size_t in_plane = (size_t)Hp * Wp * CB, out_plane = (size_t)OHp * OWp * CB;
+    const size_t in_row = (size_t)Wp * CB, w_kb = (size_t)Cb * 9 * CB * CB;
+    const int N = d->N, OH = d->OH, OWd = d->OW, KT = Kb / 2, oh_ = d->out_halo;
+
+#pragma omp parallel for collapse(3) schedule(static) if (threads)
+    for (int n = 0; n < N; n++)
+        for (int kt = 0; kt < KT; kt++)
+            for (int oh = 0; oh < OH; oh++) {
+                const int kb = kt * 2;
+                const float *irow = in + blk_idx(Cb, Hp, Wp, n, 0, oh, 0);
+                float *orow = out + blk_idx(Kb, OHp, OWp, n, kb, oh + oh_, oh_);
+                for (int ow = 0; ow < OWd; ow += 5)
+                    ukr_2x5_tuned<UT, PIPE>(Cb, irow + (size_t)ow * CB, in_plane, in_row, wp + kb * w_kb, w_kb,
+                                            bias + kb * CB, orow + (size_t)ow * CB, out_plane, d->fuse_silu);
+            }
+}
+
 /* ------------------------------------------------------------- versions ---- */
+void conv3x3_s1_v6(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_tuned<9, false>(d, in, wp, bias, out, false); /* all 9 taps unrolled */
+}
+void conv3x3_s1_v6b(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_tuned<3, false>(d, in, wp, bias, out, false); /* s unrolled, loop over r (smaller code) */
+}
+void conv3x3_s1_v7(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_tuned<9, true>(d, in, wp, bias, out, false);  /* v6 + software-pipelined loads */
+}
+void conv3x3_s1_v7b(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_tuned<3, true>(d, in, wp, bias, out, false);  /* v6b + software-pipelined loads */
+}
+void conv3x3_s1_v7mt(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_tuned<9, true>(d, in, wp, bias, out, true);   /* v7 on all cores (compare with v3) */
+}
+
 void conv3x3_s1_v1(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     conv3x3_s1_tiled<1, 1>(d, in, wp, bias, out, false); /* 1 accumulator: latency-bound */
 }
@@ -300,6 +443,7 @@ void pack_weights_s1_kb2(const float *w, int K, int C, int R, int S, float *dst)
         conv3x3_s1_v0(d, in, wp, bias, out); }
 S1_FALLBACK(conv3x3_s1_v1) S1_FALLBACK(conv3x3_s1_v2) S1_FALLBACK(conv3x3_s1_v3)
 S1_FALLBACK(conv3x3_s1_v4) S1_FALLBACK(conv3x3_s1_v4b)
+S1_FALLBACK(conv3x3_s1_v6) S1_FALLBACK(conv3x3_s1_v6b) S1_FALLBACK(conv3x3_s1_v7) S1_FALLBACK(conv3x3_s1_v7b) S1_FALLBACK(conv3x3_s1_v7mt)
 /* v5 reads the v5 weight order, so its fallback must too: a plain scalar loop over that order */
 void conv3x3_s1_v5(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     const int Cb = ceil_div(d->C, CB), Kb = ceil_div(d->K, CB);

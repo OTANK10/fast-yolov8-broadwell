@@ -8,8 +8,8 @@
   ONNX Runtime (cross-check): built-in profiler -> per-node microseconds
 
 Writes results/baseline_b<N>_t<T>.csv with, per conv layer, the median time and
-the resulting FLOPs/cycle and % of the T-core peak (32 FLOPs/cycle/core at the
-2.4 GHz nominal clock), so it lines up with what bench_layer prints.
+the resulting FLOPs/cycle and % of the T-core peak (32 FLOPs/cycle/core, or $PEAK_FPC,
+at the base clock read from /proc/cpuinfo), so it lines up with what bench_layer prints.
 """
 import argparse, csv, json, os, statistics, sys, time
 import numpy as np

@@ -13,3 +13,11 @@ data/models
 data/tensors
 data/images/
 results/raw/
+
+# LaTeX build files
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz

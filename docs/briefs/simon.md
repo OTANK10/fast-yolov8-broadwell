@@ -27,7 +27,7 @@ In NCHW8c a 1x1 conv is `out[pixel][k] = bias[k] + Σ_c in[pixel][c] · W[k][c]`
 
 ## Your first three tasks
 
-1. Set up git and ece007 with `docs/WORKFLOW.md`, then run `scripts/run_kernels.sh 1x1_v1 1x1` (currently the scalar fallback) and `python scripts/baseline_bench.py`.
+1. Set up git and ece028 with `docs/WORKFLOW.md`, then run `scripts/run_kernels.sh 1x1_v1 1x1` (currently the scalar fallback) and `python scripts/baseline_bench.py`.
 2. Write `conv1x1_v2` with the 2×5 tile (register it in `include/kernels.h`, `benchmarks/bench_layer.cpp`, `tests/test_kernels.cpp`). Pass `ctest`, then `scripts/run_kernels.sh 1x1_v2 1x1`.
 3. Write the SPPF pool kernel and its benchmark, then the faster SiLU.
 

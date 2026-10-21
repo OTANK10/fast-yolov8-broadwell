@@ -4,7 +4,7 @@ This file is read automatically by Claude Code when it runs in this repo. If you
 
 ## What this project is
 
-CMU 18-645 (How to Write Fast Code), Fall 2026, team of three: Om Tank, O'Malley Sherlock, Bohan (Simon) Yu. We write fast FP32 C++ kernels for the convolution layers of the pretrained YOLOv8n object detector and measure how close they get to the peak of one machine: **ece007, Intel Xeon E5-2640 v4 (Broadwell-EP), 2 sockets x 10 cores, AVX2 + FMA, no AVX-512, 16 YMM registers, 32 KB L1D, 256 KB L2 per core, 25 MB L3 per socket**. Peak is 32 FP32 FLOPs/cycle/core (2 FMA ports x 8 lanes x 2). We are not training anything. Baselines are OpenCV DNN (primary) and ONNX Runtime, run on the same ONNX model and images.
+CMU 18-645 (How to Write Fast Code), Fall 2026, team of three: Om Tank, O'Malley Sherlock, Bohan (Simon) Yu. We write fast FP32 C++ kernels for the convolution layers of the pretrained YOLOv8n object detector and measure how close they get to the peak of one machine: **ece028, Intel Xeon E5-2640 v4 (Broadwell-EP) @ 2.40 GHz (turbo 3.4), 2 sockets x 10 cores (40 hardware threads with Hyper-Threading), 2 NUMA nodes (even CPU ids on node 0, odd on node 1), AVX2 + FMA, no AVX-512, 16 YMM registers, 32 KB L1D, 256 KB L2 per core, 25 MB L3 per socket**. We moved from ece007 to ece028 on Oct 20; it is the same CPU model. Peak is 32 FP32 FLOPs/cycle/core (2 FMA ports x 8 lanes x 2). Use at most 20 threads (one per physical core); `run_kernels.sh` pins with `OMP_PLACES=cores`. We are not training anything. Baselines are OpenCV DNN (primary) and ONNX Runtime, run on the same ONNX model and images.
 
 Grading cares about: correctness against the baseline, FLOPs/cycle and % of peak per real layer, and a clear explanation of the design (independent ops, dependency chains, functional units, peak, register tile, register reuse, memory layout). Each kernel owner presents their own kernel.
 
@@ -30,7 +30,7 @@ Shared files, change only in a small separate PR that the whole team reviews: `i
 ## Commands
 
 ```sh
-# ece007, once:   bash scripts/setup_ece007.sh       then every shell:  source /scratch/$USER/645/venv/bin/activate
+# ece028, once:   bash scripts/setup.sh       then every shell:  source /scratch/$USER/645/venv/bin/activate
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DYOLO_ENABLE_BROADWELL=ON   # ON = AVX2 kernels; OFF on a Mac
 cmake --build build -j
 ctest --test-dir build --output-on-failure                    # random-data check of every kernel vs the reference
@@ -41,14 +41,14 @@ python scripts/plot_results.py results/<kernel>_b1_t1.csv results/baseline_b1_t1
 cmake --build build --target asm_s1                           # assembly of the stride-1 kernel
 ```
 
-Kernel names: `ref`, `generic`, `s1_v0`, `s1_v1`, `s2_v1`, `1x1_v1`. Kinds: `3x3s1`, `3x3s2`, `1x1`. Layer list with shapes, owners and FLOPs: `docs/LAYERS.md`.
+Kernel names: `ref`, `generic`, `s1_v0`..`s1_v3`, `s1_t<KB>x<OW>`, `s2_v1`, `1x1_v1`. Machine facts: `bash scripts/machine_info.sh`. Kinds: `3x3s1`, `3x3s2`, `1x1`. Layer list with shapes, owners and FLOPs: `docs/LAYERS.md`.
 
 ## Rules for any change Claude makes here
 
 1. Work on the owner's branch (`om/conv3x3-s1`, `sherlock/conv3x3-s2`, `simon/sppf`), never directly on `main`.
 2. A new optimization is a new version (`conv3x3_s2_v2`), not an edit of the old one. Register it in `include/kernels.h`, the table in `benchmarks/bench_layer.cpp`, and `tests/test_kernels.cpp`. Old versions stay for the presentation.
 3. Before saying a kernel works: `ctest` passes and `scripts/run_kernels.sh <kernel> <kind>` prints "all layers PASS". The tolerance is max relative error 1e-4 against the baseline's real outputs.
-4. Only numbers from ece007 built with `-DYOLO_ENABLE_BROADWELL=ON` go in the report. Over 100% of peak means the cycle count is wrong (turbo vs TSC), not that the kernel is that fast; see `docs/WORKFLOW.md`.
+4. Only numbers from ece028 built with `-DYOLO_ENABLE_BROADWELL=ON` go in the report. Over 100% of peak means the cycle count is wrong (turbo vs TSC), not that the kernel is that fast; see `docs/WORKFLOW.md`.
 5. Timed regions contain only the kernel call. No file I/O, layout conversion or weight packing inside timing.
 6. Explain every optimization in terms the owner can present: which bottleneck it removes (FMA latency, load ports, L1/L2 capacity, memory bandwidth, threads), and what the numbers before and after were.
 7. Do not commit `data/models`, `data/tensors`, `results/raw`, or any `.onnx`, `.pt`, `.bin` file.

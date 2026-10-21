@@ -16,7 +16,8 @@
  *   output.bin   NCHW float32, the baseline's output after SiLU (= conv_out if no SiLU)
  *
  * FLOPs/cycle uses core cycles (perf_event) for 1 thread when the kernel
- * allows it, otherwise TSC cycles (wall time at 2.4 GHz). The output says which.
+ * allows it, otherwise TSC cycles (wall time at the base clock). The output says which.
+ * Peak defaults to 32 FLOPs/cycle/core (AVX2); export PEAK_FPC=<n> to change it.
  *
  * Everything outside the kernel call (file I/O, layout conversion, weight
  * packing) is outside the timed region.
@@ -39,14 +40,24 @@
 
 using namespace fastyolo;
 
-typedef struct { const char *name; conv_fn_t fn; } kernel_entry_t;
+/* pack = this kernel's weight packer; nullptr means the team layout (pack_weights). */
+typedef struct { const char *name; conv_fn_t fn; pack_fn_t pack; } kernel_entry_t;
 
 static const kernel_entry_t KERNELS[] = {
-    {"generic", conv_blk_generic},
-    {"s1_v0", conv3x3_s1_v0},
-    {"s1_v1", conv3x3_s1_v1},
-    {"s2_v1", conv3x3_s2_v1},
-    {"1x1_v1", conv1x1_v1},
+    {"generic", conv_blk_generic, nullptr},
+    {"s1_v0", conv3x3_s1_v0, nullptr},
+    {"s1_v1", conv3x3_s1_v1, nullptr},
+    {"s1_v2", conv3x3_s1_v2, nullptr},
+    {"s1_v3", conv3x3_s1_v3, nullptr},
+    {"s1_v4", conv3x3_s1_v4, nullptr},
+    {"s1_v4b", conv3x3_s1_v4b, nullptr},
+    {"s1_v5", conv3x3_s1_v5, pack_weights_s1_kb2},
+    {"s1_t1x1", conv3x3_s1_t1x1, nullptr}, {"s1_t1x2", conv3x3_s1_t1x2, nullptr}, {"s1_t1x4", conv3x3_s1_t1x4, nullptr},
+    {"s1_t1x5", conv3x3_s1_t1x5, nullptr}, {"s1_t1x10", conv3x3_s1_t1x10, nullptr},
+    {"s1_t2x1", conv3x3_s1_t2x1, nullptr}, {"s1_t2x2", conv3x3_s1_t2x2, nullptr}, {"s1_t2x4", conv3x3_s1_t2x4, nullptr},
+    {"s1_t2x5", conv3x3_s1_t2x5, nullptr},
+    {"s2_v1", conv3x3_s2_v1, nullptr},
+    {"1x1_v1", conv1x1_v1, nullptr},
     /* add your kernel here */
 };
 #define NKERNELS (int)(sizeof(KERNELS) / sizeof(KERNELS[0]))
@@ -67,8 +78,8 @@ static float *read_bin(const char *dir, const char *file, size_t nfloats) {
 }
 
 /* Core clock cycles of THIS thread via perf_event (-1 if not permitted).
- * rdtsc ticks at the fixed 2.4 GHz nominal clock, but the core turbos up to
- * 3.4 GHz, so TSC "cycles" undercount real cycles by up to ~1.4x and make you
+ * rdtsc ticks at the fixed base clock, but the core turbos higher,
+ * so TSC "cycles" undercount real cycles and make you
  * look faster than peak. For single-thread runs we report core cycles. */
 static int perf_open_cycles(void) {
 #ifndef __linux__
@@ -94,7 +105,7 @@ static uint64_t perf_read(int fd) {
     return v;
 }
 
-/* Measure the TSC rate once (should print ~2.4 GHz on ece007). */
+/* Measure the TSC rate once (should match the "@ x.xxGHz" in the CPU name). */
 static double tsc_ghz(void) {
     struct timespec a{}, b{};
     clock_gettime(CLOCK_MONOTONIC, &a);
@@ -134,9 +145,10 @@ int main(int argc, char **argv) {
     }
 
     conv_fn_t fn = NULL;
+    pack_fn_t pack = NULL;
     int is_ref = !strcmp(kname, "ref");
     for (int i = 0; i < NKERNELS; i++)
-        if (!strcmp(kname, KERNELS[i].name)) fn = KERNELS[i].fn;
+        if (!strcmp(kname, KERNELS[i].name)) { fn = KERNELS[i].fn; pack = KERNELS[i].pack; }
     if (!fn && !is_ref) usage();
 
 #ifdef _OPENMP
@@ -175,7 +187,7 @@ int main(int argc, char **argv) {
     float *out_blk = alloc_aligned(blk_size(d.N, d.K, d.OH, d.OW, d.out_halo));
     float *got = alloc_aligned(n_out);
     nchw_to_blk(in, d.N, d.C, d.H, d.W, d.in_halo, in_blk);
-    pack_weights(w, d.K, d.C, d.R, d.S, w_pack);
+    (pack ? pack : pack_weights)(w, d.K, d.C, d.R, d.S, w_pack);
 
 #define RUN() do { if (is_ref) conv_ref_nchw(&d, in, w, bias, got); \
                    else fn(&d, in_blk, w_pack, bias_pad, out_blk); } while (0)
@@ -216,15 +228,17 @@ int main(int argc, char **argv) {
     double best = use_core ? (double)core[0] : (double)tsc[0];
     double med = use_core ? (double)core[reps / 2] : (double)tsc[reps / 2];
     double ghz = tsc_ghz(), secs = (double)tsc[0] / (ghz * 1e9);
-    double fpc = flops / best, pct = 100.0 * fpc / (PEAK_FLOPS_PER_CYCLE_PER_CORE * threads);
+    const char *pk = getenv("PEAK_FPC"); /* peak FLOPs/cycle/core; default 32 = AVX2 with 2 FMA units */
+    double peak_core = pk ? atof(pk) : PEAK_FLOPS_PER_CYCLE_PER_CORE;
+    double fpc = flops / best, pct = 100.0 * fpc / (peak_core * threads);
     double gflops = flops / secs / 1e9;
     const char *src = use_core ? "core" : "tsc";
 
     const char *layer = strrchr(dir, '/') ? strrchr(dir, '/') + 1 : dir;
     if (csv)
-        printf("%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,%s,%.3f,%.2f,%.2f,%.3e,%d\n", layer, kname,
+        printf("%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,%s,%.3f,%.2f,%.2f,%.3e,%d,%.1f\n", layer, kname,
                d.N, d.C, d.H, d.W, d.K, d.R, d.S, d.stride, threads, flops, best, med, src, fpc, pct, gflops,
-               max_err, pass);
+               max_err, pass, secs * 1e6);
     else
         printf("  threads=%d  %.3g FLOPs  best %.0f %s-cycles (median %.0f)  time %.1f us  ->  %.2f FLOPs/cycle"
                "  = %.1f%% of %d-core peak  (%.1f GFLOP/s, TSC %.2f GHz)\n",

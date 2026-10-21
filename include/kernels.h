@@ -19,10 +19,23 @@ void conv_blk_generic(const conv_desc_t *d, const float *in_blk, const float *w_
                       const float *bias, float *out_blk);
 
 // ---- 3x3 stride 1 (Om, src/conv3x3_s1.cpp) ----
-void conv3x3_s1_v0(const conv_desc_t *d, const float *in, const float *w,
-                   const float *bias, float *out);  // scalar, same loop order as v1
-void conv3x3_s1_v1(const conv_desc_t *d, const float *in, const float *w,
-                   const float *bias, float *out);  // AVX2 2x5 microkernel + OpenMP
+#define FASTYOLO_CONV_DECL(name) \
+    void name(const conv_desc_t *d, const float *in, const float *w, const float *bias, float *out);
+FASTYOLO_CONV_DECL(conv3x3_s1_v0)   // scalar, the loop order every later version keeps
+FASTYOLO_CONV_DECL(conv3x3_s1_v1)   // AVX2, 1 accumulator (latency-bound)
+FASTYOLO_CONV_DECL(conv3x3_s1_v2)   // AVX2 2x5 register tile, 10 accumulators, 1 core
+FASTYOLO_CONV_DECL(conv3x3_s1_v3)   // v2 + OpenMP
+FASTYOLO_CONV_DECL(conv3x3_s1_v4)   // 2x6 tile, 12 accumulators, 6+2 row tail, 1 core
+FASTYOLO_CONV_DECL(conv3x3_s1_v4b)  // same, 4+4 row tail
+FASTYOLO_CONV_DECL(conv3x3_s1_v5)   // v4 + weights in microkernel order (needs pack_weights_s1_kb2)
+// Weight packer for v5: [Kb/2][Cb][3][3][8 ic][2][8 oc]. Same size as pack_weights.
+void pack_weights_s1_kb2(const float *oihw, int K, int C, int R, int S, float *dst);
+typedef void (*pack_fn_t)(const float *oihw, int K, int C, int R, int S, float *dst);
+// tile-shape sweep (single core): KB output-channel blocks x OW pixels
+FASTYOLO_CONV_DECL(conv3x3_s1_t1x1) FASTYOLO_CONV_DECL(conv3x3_s1_t1x2) FASTYOLO_CONV_DECL(conv3x3_s1_t1x4)
+FASTYOLO_CONV_DECL(conv3x3_s1_t1x5) FASTYOLO_CONV_DECL(conv3x3_s1_t1x10)
+FASTYOLO_CONV_DECL(conv3x3_s1_t2x1) FASTYOLO_CONV_DECL(conv3x3_s1_t2x2) FASTYOLO_CONV_DECL(conv3x3_s1_t2x4)
+FASTYOLO_CONV_DECL(conv3x3_s1_t2x5)
 
 // ---- 3x3 stride 2 (O'Malley, src/conv3x3_s2.cpp) ----
 void conv3x3_s2_v1(const conv_desc_t *d, const float *in, const float *w,

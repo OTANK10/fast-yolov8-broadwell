@@ -4,7 +4,7 @@ This is the one page to read before you touch anything. It says what we are buil
 
 ## The project in five lines
 
-We take the pretrained YOLOv8n detector, export it to ONNX, and rewrite its convolution layers as fast AVX2 C++ kernels for one machine, ece007 (Broadwell Xeon, 32 FP32 FLOPs/cycle/core peak). Every kernel is checked against the real outputs of the baseline model on real images, then timed and reported as FLOPs/cycle and % of peak, next to OpenCV DNN and ONNX Runtime on the same layers. The whole structure (data layout, test harness, data dumps, baselines, plotting) is already built and shared. Each of us only writes the inside of our own kernel.
+We take the pretrained YOLOv8n detector, export it to ONNX, and rewrite its convolution layers as fast AVX2 C++ kernels for one machine, ece028 (Broadwell Xeon E5-2640 v4, 2 × 10 cores, 32 FP32 FLOPs/cycle/core peak). Every kernel is checked against the real outputs of the baseline model on real images, then timed and reported as FLOPs/cycle and % of peak, next to OpenCV DNN and ONNX Runtime on the same layers. The whole structure (data layout, test harness, data dumps, baselines, plotting) is already built and shared. Each of us only writes the inside of our own kernel.
 
 ## Who does what
 
@@ -22,15 +22,15 @@ All kernels read and write the same data format, defined once in `include/common
 
 ## Setup (once, about 15 minutes)
 
-1. Git and the repo on ece007: follow "First-time git setup" in [docs/WORKFLOW.md](WORKFLOW.md). Your branch: `sherlock/conv3x3-s2` or `simon/sppf`.
-2. `bash scripts/setup_ece007.sh` from the repo root. It creates a Python environment on `/scratch`, downloads YOLOv8n, exports it, dumps every layer's real data, builds with AVX2 and runs the tests. It ends by timing one layer.
+1. Git and the repo on ece028: follow "First-time git setup" in [docs/WORKFLOW.md](WORKFLOW.md). Your branch: `sherlock/conv3x3-s2` or `simon/sppf`.
+2. `bash scripts/setup.sh` from the repo root. It creates a Python environment on `/scratch`, downloads YOLOv8n, exports it, dumps every layer's real data, builds with AVX2 and runs the tests. It ends by timing one layer.
 3. Every new shell: `source /scratch/$USER/645/venv/bin/activate`.
 
-You can also clone on a laptop to read code and run `ctest` (build with `-DYOLO_ENABLE_BROADWELL=OFF` on a Mac), but only ece007 numbers go in the report.
+You can also clone on a laptop to read code and run `ctest` (build with `-DYOLO_ENABLE_BROADWELL=OFF` on a Mac), but only ece028 numbers go in the report.
 
 ## Using Claude with this repo
 
-**Claude Code (recommended).** Run `claude` from the repo root on ece007 or your laptop. It reads `CLAUDE.md` automatically, so it already knows the project, the rules, who owns which file and how to test. Three shared commands are included:
+**Claude Code (recommended).** Run `claude` from the repo root on ece028 or your laptop. It reads `CLAUDE.md` automatically, so it already knows the project, the rules, who owns which file and how to test. Three shared commands are included:
 
 | Command | What it does |
 |---|---|

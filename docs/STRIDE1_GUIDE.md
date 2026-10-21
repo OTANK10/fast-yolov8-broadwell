@@ -1,6 +1,6 @@
 # 3×3 stride-1 convolution: design notes (Om)
 
-This walks through `src/conv3x3_s1.cpp` in the order the Project 2 handout asks its questions, so it doubles as the outline for the mid-project document and slides. Every number here is checkable: shapes come from `docs/LAYERS.md`, instruction numbers from your Assignment 1 measurements or [uops.info](https://uops.info) (Broadwell column).
+This walks through `src/conv3x3_s1.cpp` in the order the Project 2 handout asks its questions, so it doubles as the outline for the mid-project document and slides. Every number here is checkable: shapes come from `docs/LAYERS.md`, instruction numbers from your Assignment 1 measurements or [uops.info](https://uops.info) (the column for ece028's microarchitecture; `scripts/machine_info.sh` prints the CPU model).
 
 ## 1. What the layer computes
 
@@ -22,7 +22,7 @@ Stride 1 and pad 1 mean the output is the same size as the input. There are 32 s
 
 **SIMD.** AVX2 with FMA3: 16 YMM registers, 8 FP32 lanes each. No AVX-512.
 
-**Specialized units.** None that help FP32 on Broadwell: no AVX-512, no VNNI (and VNNI is int8 anyway), no AMX. F16C only converts half precision.
+**Specialized units.** For FP32 with AVX2, none beyond the two FMA units. Check `scripts/machine_info.sh` on ece028: if it reports AVX-512, that is a wider FMA (16 lanes) the team could target later; VNNI and AMX, if present, are for int8/bf16 and do not help FP32.
 
 ## 3. Peak (handout part 2)
 
@@ -33,7 +33,7 @@ Stride 1 and pad 1 mean the output is the same size as the input. There are 32 s
 | `vmovaps ymm, m256` | 8 weights | load-to-use ~5 to 7 cycles | 2 per cycle (ports 2, 3) |
 | `vmovaps m256, ymm` | output store | | 1 per cycle (port 4) |
 
-Machine peak per core = 2 FMA/cycle × 8 lanes × 2 FLOPs = **32 FLOPs/cycle**. The node has 20 cores, so 640 FLOPs/cycle. Use your Assignment 1 latency and throughput numbers in the slides; they are your own measurements of exactly these instructions.
+Machine peak per core = 2 FMA/cycle × 8 lanes × 2 FLOPs = **32 FLOPs/cycle**. Multiply by ece028's core count (from `scripts/machine_info.sh`) for the whole machine. Use your Assignment 1 latency and throughput numbers in the slides; they are your own measurements of exactly these instructions.
 
 The kernel can reach that peak only if (a) at least 2 × 5 = **10 independent accumulators** are in flight, so the FMA latency is hidden, and (b) the loads it needs per FMA fit in the 2 load ports. Section 4 picks a tile that satisfies both. The epilogue is the only non-FMA work: about 20 vector ops per output register (exp polynomial, store) plus one `vdivps`, which on Broadwell occupies the divider for roughly 10 cycles. Against C·9 FMAs per output register (72 FMA cycles at C = 16, 576 at C = 128) that is on the order of 20% for the 16-channel layers and a few percent for the 128-channel ones. Replacing the divide with `vrcpps` plus one Newton step is an easy win for Simon. That is the kernel's theoretical peak per layer: 32 × FMA_cycles / (FMA_cycles + epilogue_cycles).
 
@@ -53,11 +53,11 @@ The kernel can reach that peak only if (a) at least 2 × 5 = **10 independent ac
 
 **Size of the kernel.** One call produces 2 × 8 channels × 5 pixels = **80 outputs**, reducing over all C·9 inputs before storing anything.
 
-**Register allocation.** 10 accumulators (`c0[0..4]` for output block kb, `c1[0..4]` for kb+1), 2 weight registers (`wv0`, `wv1`), 1 broadcast register (`x`): 13 of the 16 YMM registers. `cmake --build build --target asm_s1` confirms the compiler kept all of them in registers (no `(%rsp)` traffic in the loop).
+**Register allocation.** 10 accumulators (`acc[0][0..4]` for output block kb, `acc[1][0..4]` for kb+1), 2 weight registers (`wv[0]`, `wv[1]`), 1 broadcast register (`x`): 13 of the 16 YMM registers. `cmake --build build --target asm_s1` confirms the compiler kept all of them in registers (no `(%rsp)` traffic in the loop).
 
 **Register reuse.** Each weight register is reused by 5 FMAs (one per output pixel). Each broadcast register is reused by 2 FMAs (one per output block). The accumulators live in registers for the whole C·9 reduction and are written to memory once. The bias is loaded once into the accumulators' initial value, so the bias add is free.
 
-**Implementation.** Read `conv3x3_s1_v0` first: it is the same loop nest in scalar C, with `acc[8]` where v1 has a register. Then `ukr_2x5`:
+**Implementation.** Read `conv3x3_s1_v0` first: it is the same loop nest in scalar C, with `acc[8]` where the AVX2 versions have a register. Then `ukr<KB, OW>`, shown here for KB = 2, OW = 5 (that is `s1_v2`):
 
 ```
 acc[0..1][0..4] = bias for blocks kb, kb+1
@@ -72,7 +72,15 @@ for cb in 0..C/8-1:                     # input channel block
 store SiLU(acc) to out[kb..kb+1][oh][ow..ow+4]
 ```
 
-The driver `conv3x3_s1_v1` calls this for every `(n, kb pair, oh, ow step of 5)`, with OpenMP over the first three loops.
+The driver `conv3x3_s1_tiled<KB, OW>` calls this for every `(n, group of KB output blocks, oh, ow step of OW)`. `s1_v2` runs it on one core; `s1_v3` adds OpenMP over the first three loops.
+
+**The version staircase.** `s1_v1` is the same microkernel with a 1×1 tile: one accumulator, so every FMA waits 5 cycles for the previous one and the kernel tops out near 32 × 1/10 = 3.2 FLOPs/cycle. `s1_v2` (2×5, 10 accumulators) removes that wait. `scripts/tile_sweep.sh` runs every tile from 1 to 10 accumulators so the slide can show FLOPs/cycle rising with the accumulator count and flattening at 10.
+
+**Measured on ece028 (Oct 20).** v1 = 3.2 FLOPs/cycle on every layer (10.0% of peak, exactly 32 / 10: the latency bound). The tile sweep rises by about 3.2 FLOPs/cycle per accumulator up to 5, then bends: 8 accumulators reach 82% of their ideal, 10 reach 80% (25.6). `perf stat` shows 2.95 uops/cycle, so the front end (4/cycle) is not the limit, and turning SiLU off gains only a few percent. The explanation: at exactly 10 accumulators each chain is 5 cycles x C·9 long and the FMA ports need exactly that many cycles, so there is zero slack and every late load or misplaced uop is a lost FMA slot. 1x10 (11 loads per 10 FMAs, above the 2 load ports' 10) is load-bound at 69%, which is the register-reuse argument for 2x5.
+
+**v4: 2 x 6 tile.** 12 accumulators (2 of slack, the same count BLIS uses in its Haswell/Broadwell SGEMM microkernel), 12 + 2 + 1 = 15 registers, 8 loads per 12 FMAs. No yolov8n width is a multiple of 6 (160 = 26·6 + 4, 80 = 13·6 + 2, 40 = 6·6 + 4, 20 = 3·6 + 2), so each row ends in a tail of 2x4 / 2x2 / 2x1 tiles from the same template. v4 uses 6 + 2; v4b gives back one 6-tile when the tail is 2 and does 4 + 4, because a 2x2 tile has only 4 accumulators. On paper they tie on the 20-wide layers; ece028 decides.
+
+**v5: packing.** The course's packing step: copy the operand once, offline, into exactly the order the microkernel reads it. v4 reads its 2 weight vectors per step from two streams `w_kb` floats apart. `pack_weights_s1_kb2` reorders the weights to `[K/16][C/8][3][3][8 ic][2][8 oc]`, so the 16 floats one step needs are adjacent and the whole microkernel walks one contiguous stream. The input needs no packing: NCHW8c with the halo already gives the microkernel 6 consecutive pixels x 8 channels per row, contiguous. Packing cost is outside the timed region, like BN folding, and is paid once per model load.
 
 ## 5. Memory layout (handout part 4)
 
@@ -92,7 +100,7 @@ The driver `conv3x3_s1_v1` calls this for every `(n, kb pair, oh, ow step of 5)`
 | 128 | 10.8 KB | 73.7 KB | L2 |
 | 256 | 21.5 KB | 147 KB | L2, barely |
 
-Consecutive calls along a row reuse the same weights, so for C ≤ 32 everything stays in L1. From C = 64 up the weight slab streams from L2 on every call. Whether that hurts is the first thing to measure on ece007 (compare % of peak for the 16, 32, 64 and 128 channel layers). If it does, v2 blocks the `cb` loop: process a few input-channel blocks at a time so the weights stay in L1, carrying partial sums in the output buffer between blocks.
+Consecutive calls along a row reuse the same weights, so for C ≤ 32 everything stays in L1. From C = 64 up the weight slab streams from L2 on every call. Whether that hurts is the first thing to measure on ece028 (compare % of peak for the 16, 32, 64 and 128 channel layers). If it does, v4 blocks the `cb` loop: process a few input-channel blocks at a time so the weights stay in L1, carrying partial sums in the output buffer between blocks.
 
 ## 6. Parallelization and NUMA
 
@@ -104,8 +112,8 @@ Report FLOPs/cycle in core cycles for one thread and in TSC cycles (wall time) f
 
 ## 8. Next steps, in order
 
-1. On ece007: `scripts/run_kernels.sh s1_v1 3x3s1` and `python scripts/baseline_bench.py`, then `plot_results.py`. These are the plots for handout part 5.
+1. On ece028: `scripts/tile_sweep.sh`, then `scripts/run_kernels.sh` for `s1_v1`, `s1_v2`, `s1_v3`, and `python scripts/baseline_bench.py`, then `plot_results.py`. These are the plots for handout part 5.
 2. Check single-core % of peak across channel counts (section 5 table) to see where L2-resident weights cost you.
-3. v2: cache-block the `cb` loop for C ≥ 64.
+3. v4: cache-block the `cb` loop for C ≥ 64.
 4. Scale threads 1, 2, 5, 10, 20 at batch 1 and 16; fix first-touch for 20.
 5. Fuse the Bottleneck residual add into `model.*.m.*.cv2`'s epilogue (needs a dump of the Add output and a harness flag).

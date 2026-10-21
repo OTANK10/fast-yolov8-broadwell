@@ -12,7 +12,7 @@ mkdir -p results
 cmake --build build -j >/dev/null
 # bind threads to cores, fill socket 0 first (NUMA: keep data and threads on one socket while T<=10)
 export OMP_PROC_BIND=close OMP_PLACES=cores
-echo "layer,kernel,N,C,H,W,K,R,S,stride,threads,flops,best_cycles,median_cycles,cycle_src,flops_per_cycle,pct_peak,gflops,max_err,pass" > "$out"
+echo "layer,kernel,N,C,H,W,K,R,S,stride,threads,flops,best_cycles,median_cycles,cycle_src,flops_per_cycle,pct_peak,gflops,max_err,pass,time_us" > "$out"
 fail=0
 while IFS=, read -r dir onnx_name k _; do
   [[ "$k" == "$kind" ]] || continue

@@ -4,7 +4,7 @@ This is the one page to read before you touch anything. It says what we are buil
 
 ## The project in five lines
 
-We take the pretrained YOLOv8n detector, export it to ONNX, and rewrite its convolution layers as fast AVX2 C++ kernels for one machine, ece028 (an Intel Xeon; AVX2 peak 32 FP32 FLOPs/cycle/core). Every kernel is checked against the real outputs of the baseline model on real images, then timed and reported as FLOPs/cycle and % of peak, next to OpenCV DNN and ONNX Runtime on the same layers. The whole structure (data layout, test harness, data dumps, baselines, plotting) is already built and shared. Each of us only writes the inside of our own kernel.
+We take the pretrained YOLOv8n detector, export it to ONNX, and rewrite its convolution layers as fast AVX2 C++ kernels for one machine, ece028 (Broadwell Xeon E5-2640 v4, 2 × 10 cores, 32 FP32 FLOPs/cycle/core peak). Every kernel is checked against the real outputs of the baseline model on real images, then timed and reported as FLOPs/cycle and % of peak, next to OpenCV DNN and ONNX Runtime on the same layers. The whole structure (data layout, test harness, data dumps, baselines, plotting) is already built and shared. Each of us only writes the inside of our own kernel.
 
 ## Who does what
 

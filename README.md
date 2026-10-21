@@ -1,4 +1,4 @@
-# Fast YOLOv8n on an Intel Xeon (ece028)
+# Fast YOLOv8n on Intel Broadwell (ece028)
 
 **CMU 18-645: How to Write Fast Code — Fall 2026**  
 **Status:** Shared harness, layouts, per-layer data dumps and baselines are in. Stride-1 has a first AVX2 kernel (v1); stride-2, 1×1 and SPPF are correct scalar fallbacks waiting for their owners.
@@ -7,7 +7,7 @@
 
 **Teammates: read [docs/TEAM_GUIDE.md](docs/TEAM_GUIDE.md) first**, then your brief in [docs/briefs/](docs/briefs/). Claude Code picks up the project context from [CLAUDE.md](CLAUDE.md) automatically.
 
-We are **not training YOLO**. We are rebuilding selected YOLOv8n inference operations as fast C++ kernels and measuring how efficiently they use the Intel Xeon CPU of ece028. (We started on ece007, a Broadwell E5-2640 v4, and moved to ece028 on Oct 20; the repo name still says "broadwell".) Our source model is the **YOLOv8n** variant, not whatever newest YOLO model Ultralytics advertises.
+We are **not training YOLO**. We are rebuilding selected YOLOv8n inference operations as fast C++ kernels and measuring how efficiently they use the Intel Xeon E5-2640 v4 (Broadwell) CPU of ece028. (We moved from ece007 to ece028 on Oct 20; both have the same CPU.) Our source model is the **YOLOv8n** variant, not whatever newest YOLO model Ultralytics advertises.
 
 1. **One-time setup on ece028** (venv, model export, real-layer dumps, Broadwell build, tests):
 
@@ -56,7 +56,7 @@ Per Professor Low's feedback, folding batch norm into weights **does not itself 
 Model: pretrained **Ultralytics YOLOv8n**, exported to ONNX at image size 640.  
 Primary baseline: **OpenCV DNN** (as specified in the proposal).  
 Secondary reference: **ONNX Runtime CPU**.  
-Target platform: **ece028**, an Intel Xeon. Run `bash scripts/machine_info.sh` on it for the exact model, sockets, cores and cache sizes (TODO: paste them here). Our kernels use AVX2 + FMA: 16 YMM registers of 8 FP32 lanes.
+Target platform: **ece028, Intel Xeon E5-2640 v4** (Broadwell-EP, 2.40 GHz base, 3.4 GHz turbo), 2 sockets × 10 physical cores (40 threads with Hyper-Threading; use at most 20), 2 NUMA nodes, AVX2/FMA, no AVX-512, 16 YMM registers, 32 KB L1D/core, 256 KB L2/core, 25 MB L3/socket.
 
 For 32-bit FMA with AVX2, the **per-core compute peak is 32 FP32 FLOPs/cycle** (two 256-bit FMA instructions per cycle × eight lanes × two FLOPs per fused multiply-add). Actual sustained rate may be lower due to dependencies, loads, addresses, issue limits, and cache effects. The 5-cycle FMA latency suggests ~10 independent accumulator chains are required to sustain peak FMA throughput, subject to other resource constraints.
 

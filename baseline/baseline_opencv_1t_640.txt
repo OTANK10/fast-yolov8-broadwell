@@ -1,0 +1,9 @@
+[ WARN:0@0.055] global net_impl_backend.cpp:345 setPreferableTarget Targets are not supported by the new graph engine for now
+OpenCV 5.0.0, numpy 2.5.4, Python 3.12.15
+bus640.png: 640x640, 5 detections | pre 4.0 ms, infer 184.8 ms, post 1.2 ms
+  person         0.890  [477.3, 225.5, 560.0, 521.3]
+  person         0.883  [211.4, 241.4, 283.7, 507.4]
+  person         0.878  [110.0, 235.4, 224.8, 536.5]
+  bus            0.843  [98.7, 136.7, 554.9, 459.7]
+  person         0.436  [80.3, 325.8, 114.2, 514.5]
+[bench] 20 runs after 3 warmup @ imgsz 640, threads=1: forward mean 174.8 ms (min 173.8, median 174.3) | total pipeline mean 179.8 ms (5.6 FPS)

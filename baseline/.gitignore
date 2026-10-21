@@ -1,4 +1,6 @@
 *.zip
 *_out.jpg
+*_out.png
+*_det.jpg
 *.mp4
 __pycache__/

@@ -239,14 +239,14 @@ def run_stream(model, args, state):
 def main():
     ap = argparse.ArgumentParser(description="YOLOv8 ONNX inference with OpenCV DNN (CPU)")
     ap.add_argument("--model", default="yolov8n.onnx", help="path to exported .onnx")
-    ap.add_argument("--source", required=True, help="image path, video path, or webcam index (e.g. 0)")
+    ap.add_argument("--source", default="bus640.png", help="image path, video path, or webcam index (default: bus640.png)")
     ap.add_argument("--conf", type=float, default=0.25, help="confidence threshold")
     ap.add_argument("--iou", type=float, default=0.7, help="NMS IoU threshold (ultralytics default 0.7)")
     ap.add_argument("--imgsz", type=int, default=640, help="must equal the --imgsz used at export")
     ap.add_argument("--save", nargs="?", const="", default=None,
                     help="save annotated output (optionally give a path)")
     ap.add_argument("--no-show", action="store_true", help="do not open a window (headless/SSH)")
-    ap.add_argument("--threads", type=int, default=0, help="cv2.setNumThreads (0 = OpenCV default)")
+    ap.add_argument("--threads", type=int, default=1, help="cv2.setNumThreads (default 1; 0 = all cores)")
     ap.add_argument("--bench", type=int, default=0, help="images only: time N extra runs")
     ap.add_argument("--warmup", type=int, default=3, help="warmup runs before --bench")
     args = ap.parse_args()

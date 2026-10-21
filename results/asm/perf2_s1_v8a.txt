@@ -1,0 +1,19 @@
+data/tensors/b1/model.6.m.1.cv1  s1_v8a  N=1 C=64 H=40 W=40 K=64 3x3 s1  silu=1  max_err=3.01e-06 (at 14379: got 1.03058 want 1.03058)  PASS
+  threads=1  1.18e+08 FLOPs  best 3344956 tsc-cycles (median 3643494)  time 1395.3 us  ->  35.27 FLOPs/cycle  = 110.2% of 1-core peak  (84.5 GFLOP/s, TSC 2.40 GHz)
+
+ Performance counter stats for './build/bench_layer data/tensors/b1/model.6.m.1.cv1 s1_v8a':
+
+         287987559      cycles:u                                                      (50.50%)
+         578745170      uops_issued.any:u                                             (50.51%)
+         123738166      uops_executed_port.port_0:u                                     (50.52%)
+         118225049      uops_executed_port.port_1:u                                     (50.51%)
+          34347258      resource_stalls.rs:u                                          (50.65%)
+         473646106      idq.dsb_uops:u                                                (50.63%)
+          53766442      idq.mite_uops:u                                               (50.64%)
+
+       0.087361307 seconds time elapsed
+
+       0.083996000 seconds user
+       0.002958000 seconds sys
+
+

@@ -110,10 +110,15 @@ OpenMP splits `(n, kb pair, oh)` statically. At batch 1 that is between 80 (the 
 
 Report FLOPs/cycle in core cycles for one thread and in TSC cycles (wall time) for many threads; `bench_layer` prints which one it used. Over 100% of peak means the cycle count is wrong (turbo running the core faster than the 2.4 GHz TSC), not that the kernel is magic. The baseline numbers from `scripts/baseline_bench.py` use wall time at 2.4 GHz, so compare against our TSC-cycle numbers.
 
-## 8. Next steps, in order
+## 8. Phase 2 plan (after the milestone)
 
-1. On ece028: `scripts/tile_sweep.sh`, then `scripts/run_kernels.sh` for `s1_v1`, `s1_v2`, `s1_v3`, and `python scripts/baseline_bench.py`, then `plot_results.py`. These are the plots for handout part 5.
-2. Check single-core % of peak across channel counts (section 5 table) to see where L2-resident weights cost you.
-3. v4: cache-block the `cb` loop for C ≥ 64.
-4. Scale threads 1, 2, 5, 10, 20 at batch 1 and 16; fix first-touch for 20.
-5. Fuse the Bottleneck residual add into `model.*.m.*.cv2`'s epilogue (needs a dump of the Add output and a harness flag).
+Milestone status: v2 holds 77% of one core (24.7 FLOPs/cycle); v3 holds 74% of 20 cores. v4 (12 accumulators) and v5 (weights packed in reading order) did not move it, so the limit is not FMA latency or weight loads. The counters say ports 0/1 are 80% busy and allocation stalls 24% of cycles, half on a full scheduler (RS): FMAs waiting on their running sums fill it, so the next step's broadcast loads cannot enter early. Each version below follows a technique from lecture, removes one named bottleneck, and is measured with the same counters (`uops_issued`, `uops_executed_port.port_0/1`, `resource_stalls.rs`) before and after.
+
+1. **v6: software pipelining.** Issue the broadcasts and weight loads for step t+1 while the FMAs of step t run (rotate the 3 non-accumulator registers), so loads no longer wait behind FMAs in the scheduler. Target: `resource_stalls.rs` down, ports 0/1 toward 90%+. Expect intrinsics with manual unroll first; inline asm (BLIS style) only if GCC 8.5 reorders it back.
+2. **v7: leaner inner loop.** Fully unroll the 3×3 (r, s) loop and the 8 input channels so all addresses become constant offsets from one base pointer: fewer address and loop uops per 10 FMAs, which frees issue slots. Check with `asm_s1` that the loop body is 10 FMAs + 7 loads + ~2 overhead.
+3. **v8: register reuse.** Revisit the tile now that overhead is lower: a shape that loads each input broadcast once for more output-channel accumulators (e.g. 3×4 = 12 acc, 4 loads + 3 broadcasts) lowers loads per FMA. Rerun `scripts/tile_sweep.sh` on v7's loop.
+4. **v9: cache blocking.** Block the input-channel loop for C = 256 (the two head layers at 67–71%) so the weight slab stays in L2; optionally Morton-order output tiles.
+5. **Threads and NUMA.** First-touch buffers inside `omp parallel` with the kernel's schedule, test `numactl --interleave` on the two slow 20-thread layers, scale 1/2/5/10/20 threads at batch 1 and 16.
+6. **Fusion.** Bottleneck residual add in `model.*.m.*.cv2`'s epilogue (needs the Add output dumped and a harness flag).
+
+Keep v2 as the presented baseline; every later version gets its own name, test and CSV (rule 2 in CLAUDE.md).

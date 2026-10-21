@@ -25,6 +25,14 @@
  *       unrolls only s (smaller loop body, fits the uop cache).
  *   v7  v6 + software pipelining: step ci+1's weight loads issue before step
  *       ci's FMAs (15 registers). v7b = v6b + the same. v7mt = v7 on all cores.
+ *       Measured on ece028 (GCC 8.5): v6 71%, v6b 61%, v7 73% vs v2 77%. v6's
+ *       body overflows the uop cache (38% of uops from legacy decode); GCC
+ *       spills accumulators to the stack in all of them. Kept as evidence.
+ *   v8  4 x 3 broadcast-stationary tile: 12 accumulators, 7 loads / 12 FMAs
+ *       (v2: 7 / 10), so fewer issued uops per FMA. GCC spills it, so v8a
+ *       writes the inner step in inline asm with the registers fixed by hand.
+ *       v8mt = v8a on all cores. v2a = v2's 2x5 tile in the same inline asm
+ *       (control: separates register allocation from tile shape).
  *
  *   s1_t<KB>x<OW>  the same microkernel with other tile shapes, single thread,
  *       for the "how many accumulators do I need?" experiment
@@ -368,7 +376,543 @@ static void conv3x3_s1_tuned(const conv_desc_t *d, const float *in, const float 
             }
 }
 
+/* ------------------------------------- v8: broadcast-stationary 4 x 3 tile ---- */
+/*
+ * v2-v7 keep the 2 weight vectors in registers and stream the 5 broadcasts:
+ * 7 loads per 10 FMAs, about 1.76 instructions per FMA in GCC 8.5's loop, so
+ * peak needs ~3.5 issued uops/cycle of Broadwell's 4 and we sustain ~3.
+ * v8 flips it: OW = 3 broadcasts stay in registers and the KB = 4 weight
+ * vectors stream through ONE register:
+ *     per step: 3 broadcasts + 4 weight loads, 12 FMAs  -> 7 loads / 12 FMAs
+ *     registers: 12 accumulators + 3 broadcasts + 1 weight = 16
+ * 12 accumulators also give 2 chains of slack over latency x throughput.
+ * Every weight vector is used 3 times (once per pixel) straight after its
+ * load, which keeps register pressure flat (the order that made GCC spill in
+ * v6/v7 was 5 broadcasts live at once on top of 12 other values).
+ * Shapes: K/8 % 4 != 0 (the 16- and 80-channel layers) does its last 2 blocks
+ * with v2's 2x5 microkernel; widths are not multiples of 3, so each row ends
+ * with a 4x2 or 4x1 tile.
+ */
+template <int KB, int OW>
+static inline __attribute__((always_inline)) void
+ukr_bs(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+       const float *b, float *o, size_t o_kb, int fuse_silu) {
+    static_assert(KB * OW + OW + 1 <= 16, "tile needs more than 16 ymm registers");
+    __m256 acc[KB][OW];
+#pragma GCC unroll 4
+    for (int k = 0; k < KB; k++) {
+        const __m256 bv = _mm256_loadu_ps(b + k * CB);
+#pragma GCC unroll 3
+        for (int j = 0; j < OW; j++) acc[k][j] = bv;
+    }
+    for (int cb = 0; cb < Cb; cb++) {
+        const float *icb = ip + (size_t)cb * in_plane;
+        const float *wcb = w + (size_t)cb * 9 * CB * CB;
+        for (int r = 0; r < 3; r++)
+            for (int s = 0; s < 3; s++) {
+                const float *row = icb + (size_t)r * in_row + s * CB;
+                const float *wrs = wcb + (r * 3 + s) * CB * CB;
+#pragma GCC unroll 8
+                for (int ci = 0; ci < CB; ci++) {
+                    __m256 x[OW];
+#pragma GCC unroll 3
+                    for (int j = 0; j < OW; j++) x[j] = _mm256_broadcast_ss(row + j * CB + ci);
+#pragma GCC unroll 4
+                    for (int k = 0; k < KB; k++) {
+                        const __m256 wv = _mm256_load_ps(wrs + k * w_kb + ci * CB);
+#pragma GCC unroll 3
+                        for (int j = 0; j < OW; j++) acc[k][j] = _mm256_fmadd_ps(x[j], wv, acc[k][j]);
+                    }
+                }
+            }
+    }
+#pragma GCC unroll 4
+    for (int k = 0; k < KB; k++)
+#pragma GCC unroll 3
+        for (int j = 0; j < OW; j++)
+            _mm256_store_ps(o + k * o_kb + j * CB, epilogue_ps(acc[k][j], fuse_silu));
+}
+
+/*
+ * v8a: the same 4 x 3 tile with its inner step in inline assembly. GCC (8 and
+ * 13) cannot keep 12 accumulators + 3 broadcasts + 1 weight in the 16 ymm
+ * registers and spills to the stack, which is exactly what sank v6/v7. Here
+ * the allocation is fixed by hand (BLIS-style): the 12 accumulators are "+x"
+ * operands, so the compiler must give each its own register, and the asm uses
+ * ymm12-14 for the broadcasts and ymm15 for the weight (declared clobbered).
+ * One asm block = one tap (8 input channels): 24 broadcasts, 32 weight loads,
+ * 96 FMAs, 152 instructions, about v2's loop size, so it stays in the uop cache.
+ * Weight block k of the tile is at w + k*S bytes (S = floats per block * 4).
+ */
+static inline __attribute__((always_inline)) void
+ukr_4x3_asm(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+            const float *b, float *o, size_t o_kb, int fuse_silu) {
+    __m256 a00, a01, a02, a10, a11, a12, a20, a21, a22, a30, a31, a32;
+    {
+        const __m256 b0 = _mm256_loadu_ps(b), b1 = _mm256_loadu_ps(b + CB);
+        const __m256 b2 = _mm256_loadu_ps(b + 2 * CB), b3 = _mm256_loadu_ps(b + 3 * CB);
+        a00 = a01 = a02 = b0; a10 = a11 = a12 = b1; a20 = a21 = a22 = b2; a30 = a31 = a32 = b3;
+    }
+    const long S = (long)(w_kb * sizeof(float));
+    for (int cb = 0; cb < Cb; cb++) {
+        const float *icb = ip + (size_t)cb * in_plane;
+        const float *wcb = w + (size_t)cb * 9 * CB * CB;
+        for (int r = 0; r < 3; r++)
+            for (int s = 0; s < 3; s++) {
+                const float *row = icb + (size_t)r * in_row + s * CB;
+                const float *wt = wcb + (r * 3 + s) * CB * CB;
+                const float *w3 = wt + 3 * w_kb;
+                __asm__ volatile(
+        /* ci = 0: 3 broadcasts, then per weight block 1 load + 3 FMAs */
+        "vbroadcastss 0(%[row]), %%ymm12\n\t"
+        "vbroadcastss 32(%[row]), %%ymm13\n\t"
+        "vbroadcastss 64(%[row]), %%ymm14\n\t"
+        "vmovaps 0(%[w]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a02]\n\t"
+        "vmovaps 0(%[w],%[S]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a10]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a12]\n\t"
+        "vmovaps 0(%[w],%[S],2), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a20]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a21]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a22]\n\t"
+        "vmovaps 0(%[w3]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a30]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a31]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a32]\n\t"
+        /* ci = 1: 3 broadcasts, then per weight block 1 load + 3 FMAs */
+        "vbroadcastss 4(%[row]), %%ymm12\n\t"
+        "vbroadcastss 36(%[row]), %%ymm13\n\t"
+        "vbroadcastss 68(%[row]), %%ymm14\n\t"
+        "vmovaps 32(%[w]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a02]\n\t"
+        "vmovaps 32(%[w],%[S]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a10]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a12]\n\t"
+        "vmovaps 32(%[w],%[S],2), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a20]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a21]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a22]\n\t"
+        "vmovaps 32(%[w3]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a30]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a31]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a32]\n\t"
+        /* ci = 2: 3 broadcasts, then per weight block 1 load + 3 FMAs */
+        "vbroadcastss 8(%[row]), %%ymm12\n\t"
+        "vbroadcastss 40(%[row]), %%ymm13\n\t"
+        "vbroadcastss 72(%[row]), %%ymm14\n\t"
+        "vmovaps 64(%[w]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a02]\n\t"
+        "vmovaps 64(%[w],%[S]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a10]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a12]\n\t"
+        "vmovaps 64(%[w],%[S],2), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a20]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a21]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a22]\n\t"
+        "vmovaps 64(%[w3]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a30]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a31]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a32]\n\t"
+        /* ci = 3: 3 broadcasts, then per weight block 1 load + 3 FMAs */
+        "vbroadcastss 12(%[row]), %%ymm12\n\t"
+        "vbroadcastss 44(%[row]), %%ymm13\n\t"
+        "vbroadcastss 76(%[row]), %%ymm14\n\t"
+        "vmovaps 96(%[w]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a02]\n\t"
+        "vmovaps 96(%[w],%[S]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a10]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a12]\n\t"
+        "vmovaps 96(%[w],%[S],2), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a20]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a21]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a22]\n\t"
+        "vmovaps 96(%[w3]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a30]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a31]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a32]\n\t"
+        /* ci = 4: 3 broadcasts, then per weight block 1 load + 3 FMAs */
+        "vbroadcastss 16(%[row]), %%ymm12\n\t"
+        "vbroadcastss 48(%[row]), %%ymm13\n\t"
+        "vbroadcastss 80(%[row]), %%ymm14\n\t"
+        "vmovaps 128(%[w]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a02]\n\t"
+        "vmovaps 128(%[w],%[S]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a10]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a12]\n\t"
+        "vmovaps 128(%[w],%[S],2), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a20]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a21]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a22]\n\t"
+        "vmovaps 128(%[w3]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a30]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a31]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a32]\n\t"
+        /* ci = 5: 3 broadcasts, then per weight block 1 load + 3 FMAs */
+        "vbroadcastss 20(%[row]), %%ymm12\n\t"
+        "vbroadcastss 52(%[row]), %%ymm13\n\t"
+        "vbroadcastss 84(%[row]), %%ymm14\n\t"
+        "vmovaps 160(%[w]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a02]\n\t"
+        "vmovaps 160(%[w],%[S]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a10]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a12]\n\t"
+        "vmovaps 160(%[w],%[S],2), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a20]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a21]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a22]\n\t"
+        "vmovaps 160(%[w3]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a30]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a31]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a32]\n\t"
+        /* ci = 6: 3 broadcasts, then per weight block 1 load + 3 FMAs */
+        "vbroadcastss 24(%[row]), %%ymm12\n\t"
+        "vbroadcastss 56(%[row]), %%ymm13\n\t"
+        "vbroadcastss 88(%[row]), %%ymm14\n\t"
+        "vmovaps 192(%[w]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a02]\n\t"
+        "vmovaps 192(%[w],%[S]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a10]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a12]\n\t"
+        "vmovaps 192(%[w],%[S],2), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a20]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a21]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a22]\n\t"
+        "vmovaps 192(%[w3]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a30]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a31]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a32]\n\t"
+        /* ci = 7: 3 broadcasts, then per weight block 1 load + 3 FMAs */
+        "vbroadcastss 28(%[row]), %%ymm12\n\t"
+        "vbroadcastss 60(%[row]), %%ymm13\n\t"
+        "vbroadcastss 92(%[row]), %%ymm14\n\t"
+        "vmovaps 224(%[w]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a02]\n\t"
+        "vmovaps 224(%[w],%[S]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a10]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a12]\n\t"
+        "vmovaps 224(%[w],%[S],2), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a20]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a21]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a22]\n\t"
+        "vmovaps 224(%[w3]), %%ymm15\n\t"
+        "vfmadd231ps %%ymm15, %%ymm12, %[a30]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a31]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm14, %[a32]\n\t"
+                    : [a00] "+x"(a00), [a01] "+x"(a01), [a02] "+x"(a02),
+                      [a10] "+x"(a10), [a11] "+x"(a11), [a12] "+x"(a12),
+                      [a20] "+x"(a20), [a21] "+x"(a21), [a22] "+x"(a22),
+                      [a30] "+x"(a30), [a31] "+x"(a31), [a32] "+x"(a32)
+                    : [row] "r"(row), [w] "r"(wt), [S] "r"(S), [w3] "r"(w3)
+                    : "xmm12", "xmm13", "xmm14", "xmm15", "memory");
+            }
+    }
+    _mm256_store_ps(o + 0 * CB, epilogue_ps(a00, fuse_silu));
+    _mm256_store_ps(o + 1 * CB, epilogue_ps(a01, fuse_silu));
+    _mm256_store_ps(o + 2 * CB, epilogue_ps(a02, fuse_silu));
+    _mm256_store_ps(o + o_kb + 0 * CB, epilogue_ps(a10, fuse_silu));
+    _mm256_store_ps(o + o_kb + 1 * CB, epilogue_ps(a11, fuse_silu));
+    _mm256_store_ps(o + o_kb + 2 * CB, epilogue_ps(a12, fuse_silu));
+    _mm256_store_ps(o + 2 * o_kb + 0 * CB, epilogue_ps(a20, fuse_silu));
+    _mm256_store_ps(o + 2 * o_kb + 1 * CB, epilogue_ps(a21, fuse_silu));
+    _mm256_store_ps(o + 2 * o_kb + 2 * CB, epilogue_ps(a22, fuse_silu));
+    _mm256_store_ps(o + 3 * o_kb + 0 * CB, epilogue_ps(a30, fuse_silu));
+    _mm256_store_ps(o + 3 * o_kb + 1 * CB, epilogue_ps(a31, fuse_silu));
+    _mm256_store_ps(o + 3 * o_kb + 2 * CB, epilogue_ps(a32, fuse_silu));
+}
+
+/*
+ * v2a: control experiment. v2's exact 2 x 5 tile and instruction mix, but the
+ * inner step in inline asm with fixed registers (ymm13 broadcast, ymm14/15
+ * weights). v2 vs v2a isolates "hand register allocation"; v2a vs v8a isolates
+ * "4 x 3 tile, fewer loads per FMA".
+ */
+static inline __attribute__((always_inline)) void
+ukr_2x5_asm(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+            const float *b, float *o, size_t o_kb, int fuse_silu) {
+    const __m256 b0 = _mm256_loadu_ps(b), b1 = _mm256_loadu_ps(b + CB);
+    __m256 a00 = b0, a01 = b0, a02 = b0, a03 = b0, a04 = b0;
+    __m256 a10 = b1, a11 = b1, a12 = b1, a13 = b1, a14 = b1;
+    const long S = (long)(w_kb * sizeof(float));
+    for (int cb = 0; cb < Cb; cb++) {
+        const float *icb = ip + (size_t)cb * in_plane;
+        const float *wcb = w + (size_t)cb * 9 * CB * CB;
+        for (int r = 0; r < 3; r++)
+            for (int s = 0; s < 3; s++) {
+                const float *row = icb + (size_t)r * in_row + s * CB;
+                const float *wt = wcb + (r * 3 + s) * CB * CB;
+                __asm__ volatile(
+        /* ci = 0: 2 weight loads, then per pixel 1 broadcast + 2 FMAs */
+        "vmovaps 0(%[w]), %%ymm14\n\t"
+        "vmovaps 0(%[w],%[S]), %%ymm15\n\t"
+        "vbroadcastss 0(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a10]\n\t"
+        "vbroadcastss 32(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vbroadcastss 64(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a02]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a12]\n\t"
+        "vbroadcastss 96(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a03]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a13]\n\t"
+        "vbroadcastss 128(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a04]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a14]\n\t"
+        /* ci = 1: 2 weight loads, then per pixel 1 broadcast + 2 FMAs */
+        "vmovaps 32(%[w]), %%ymm14\n\t"
+        "vmovaps 32(%[w],%[S]), %%ymm15\n\t"
+        "vbroadcastss 4(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a10]\n\t"
+        "vbroadcastss 36(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vbroadcastss 68(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a02]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a12]\n\t"
+        "vbroadcastss 100(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a03]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a13]\n\t"
+        "vbroadcastss 132(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a04]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a14]\n\t"
+        /* ci = 2: 2 weight loads, then per pixel 1 broadcast + 2 FMAs */
+        "vmovaps 64(%[w]), %%ymm14\n\t"
+        "vmovaps 64(%[w],%[S]), %%ymm15\n\t"
+        "vbroadcastss 8(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a10]\n\t"
+        "vbroadcastss 40(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vbroadcastss 72(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a02]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a12]\n\t"
+        "vbroadcastss 104(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a03]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a13]\n\t"
+        "vbroadcastss 136(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a04]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a14]\n\t"
+        /* ci = 3: 2 weight loads, then per pixel 1 broadcast + 2 FMAs */
+        "vmovaps 96(%[w]), %%ymm14\n\t"
+        "vmovaps 96(%[w],%[S]), %%ymm15\n\t"
+        "vbroadcastss 12(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a10]\n\t"
+        "vbroadcastss 44(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vbroadcastss 76(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a02]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a12]\n\t"
+        "vbroadcastss 108(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a03]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a13]\n\t"
+        "vbroadcastss 140(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a04]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a14]\n\t"
+        /* ci = 4: 2 weight loads, then per pixel 1 broadcast + 2 FMAs */
+        "vmovaps 128(%[w]), %%ymm14\n\t"
+        "vmovaps 128(%[w],%[S]), %%ymm15\n\t"
+        "vbroadcastss 16(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a10]\n\t"
+        "vbroadcastss 48(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vbroadcastss 80(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a02]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a12]\n\t"
+        "vbroadcastss 112(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a03]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a13]\n\t"
+        "vbroadcastss 144(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a04]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a14]\n\t"
+        /* ci = 5: 2 weight loads, then per pixel 1 broadcast + 2 FMAs */
+        "vmovaps 160(%[w]), %%ymm14\n\t"
+        "vmovaps 160(%[w],%[S]), %%ymm15\n\t"
+        "vbroadcastss 20(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a10]\n\t"
+        "vbroadcastss 52(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vbroadcastss 84(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a02]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a12]\n\t"
+        "vbroadcastss 116(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a03]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a13]\n\t"
+        "vbroadcastss 148(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a04]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a14]\n\t"
+        /* ci = 6: 2 weight loads, then per pixel 1 broadcast + 2 FMAs */
+        "vmovaps 192(%[w]), %%ymm14\n\t"
+        "vmovaps 192(%[w],%[S]), %%ymm15\n\t"
+        "vbroadcastss 24(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a10]\n\t"
+        "vbroadcastss 56(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vbroadcastss 88(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a02]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a12]\n\t"
+        "vbroadcastss 120(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a03]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a13]\n\t"
+        "vbroadcastss 152(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a04]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a14]\n\t"
+        /* ci = 7: 2 weight loads, then per pixel 1 broadcast + 2 FMAs */
+        "vmovaps 224(%[w]), %%ymm14\n\t"
+        "vmovaps 224(%[w],%[S]), %%ymm15\n\t"
+        "vbroadcastss 28(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a00]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a10]\n\t"
+        "vbroadcastss 60(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a01]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a11]\n\t"
+        "vbroadcastss 92(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a02]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a12]\n\t"
+        "vbroadcastss 124(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a03]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a13]\n\t"
+        "vbroadcastss 156(%[row]), %%ymm13\n\t"
+        "vfmadd231ps %%ymm14, %%ymm13, %[a04]\n\t"
+        "vfmadd231ps %%ymm15, %%ymm13, %[a14]\n\t"
+                    : [a00] "+x"(a00), [a01] "+x"(a01), [a02] "+x"(a02), [a03] "+x"(a03), [a04] "+x"(a04),
+                      [a10] "+x"(a10), [a11] "+x"(a11), [a12] "+x"(a12), [a13] "+x"(a13), [a14] "+x"(a14)
+                    : [row] "r"(row), [w] "r"(wt), [S] "r"(S)
+                    : "xmm13", "xmm14", "xmm15", "memory");
+            }
+    }
+    _mm256_store_ps(o + 0 * CB, epilogue_ps(a00, fuse_silu));
+    _mm256_store_ps(o + 1 * CB, epilogue_ps(a01, fuse_silu));
+    _mm256_store_ps(o + 2 * CB, epilogue_ps(a02, fuse_silu));
+    _mm256_store_ps(o + 3 * CB, epilogue_ps(a03, fuse_silu));
+    _mm256_store_ps(o + 4 * CB, epilogue_ps(a04, fuse_silu));
+    _mm256_store_ps(o + o_kb + 0 * CB, epilogue_ps(a10, fuse_silu));
+    _mm256_store_ps(o + o_kb + 1 * CB, epilogue_ps(a11, fuse_silu));
+    _mm256_store_ps(o + o_kb + 2 * CB, epilogue_ps(a12, fuse_silu));
+    _mm256_store_ps(o + o_kb + 3 * CB, epilogue_ps(a13, fuse_silu));
+    _mm256_store_ps(o + o_kb + 4 * CB, epilogue_ps(a14, fuse_silu));
+}
+
+static void conv3x3_s1_2x5asm(const conv_desc_t *d, const float *in, const float *wp,
+                              const float *bias, float *out) {
+    const int Cb = ceil_div(d->C, CB), Kb = ceil_div(d->K, CB);
+    if (d->R != 3 || d->S != 3 || d->stride != 1 || d->in_halo != d->pad || Kb % 2 != 0 || d->OW % 5 != 0) {
+        conv_blk_generic(d, in, wp, bias, out);
+        return;
+    }
+    const int Hp = d->H + 2 * d->in_halo, Wp = d->W + 2 * d->in_halo;
+    const int OHp = d->OH + 2 * d->out_halo, OWp = d->OW + 2 * d->out_halo;
+    const size_t in_plane = (size_t)Hp * Wp * CB, out_plane = (size_t)OHp * OWp * CB;
+    const size_t in_row = (size_t)Wp * CB, w_kb = (size_t)Cb * 9 * CB * CB;
+    for (int n = 0; n < d->N; n++)
+        for (int kb = 0; kb < Kb; kb += 2)
+            for (int oh = 0; oh < d->OH; oh++) {
+                const float *irow = in + blk_idx(Cb, Hp, Wp, n, 0, oh, 0);
+                float *orow = out + blk_idx(Kb, OHp, OWp, n, kb, oh + d->out_halo, d->out_halo);
+                for (int ow = 0; ow < d->OW; ow += 5)
+                    ukr_2x5_asm(Cb, irow + (size_t)ow * CB, in_plane, in_row, wp + kb * w_kb, w_kb,
+                                bias + kb * CB, orow + (size_t)ow * CB, out_plane, d->fuse_silu);
+            }
+}
+
+template <bool ASM>
+static void conv3x3_s1_bs43(const conv_desc_t *d, const float *in, const float *wp,
+                            const float *bias, float *out, bool threads) {
+    const int Cb = ceil_div(d->C, CB), Kb = ceil_div(d->K, CB);
+    if (d->R != 3 || d->S != 3 || d->stride != 1 || d->in_halo != d->pad || Kb % 2 != 0 ||
+        (Kb % 4 != 0 && d->OW % 5 != 0)) {
+        static bool warned = false;
+        if (!warned) { warned = true; std::fprintf(stderr, "conv3x3_s1 v8: shape not supported, using generic\n"); }
+        conv_blk_generic(d, in, wp, bias, out);
+        return;
+    }
+    const int Hp = d->H + 2 * d->in_halo, Wp = d->W + 2 * d->in_halo;
+    const int OHp = d->OH + 2 * d->out_halo, OWp = d->OW + 2 * d->out_halo;
+    const size_t in_plane = (size_t)Hp * Wp * CB, out_plane = (size_t)OHp * OWp * CB;
+    const size_t in_row = (size_t)Wp * CB, w_kb = (size_t)Cb * 9 * CB * CB;
+    const int N = d->N, OH = d->OH, OWd = d->OW, oh_ = d->out_halo;
+    const int G4 = Kb / 4, G = G4 + (Kb % 4 ? 1 : 0); /* groups of 4 blocks, then one pair */
+    const int main_end = OWd - OWd % 3;
+
+#pragma omp parallel for collapse(3) schedule(static) if (threads)
+    for (int n = 0; n < N; n++)
+        for (int g = 0; g < G; g++)
+            for (int oh = 0; oh < OH; oh++) {
+                const int kb = g * 4;
+                const float *irow = in + blk_idx(Cb, Hp, Wp, n, 0, oh, 0);
+                float *orow = out + blk_idx(Kb, OHp, OWp, n, kb, oh + oh_, oh_);
+                const float *w = wp + kb * w_kb, *b = bias + kb * CB;
+                if (g < G4) {
+                    for (int ow = 0; ow < main_end; ow += 3) {
+                        if (ASM)
+                            ukr_4x3_asm(Cb, irow + (size_t)ow * CB, in_plane, in_row, w, w_kb, b,
+                                        orow + (size_t)ow * CB, out_plane, d->fuse_silu);
+                        else
+                            ukr_bs<4, 3>(Cb, irow + (size_t)ow * CB, in_plane, in_row, w, w_kb, b,
+                                         orow + (size_t)ow * CB, out_plane, d->fuse_silu);
+                    }
+                    if (OWd - main_end == 2)
+                        ukr_bs<4, 2>(Cb, irow + (size_t)main_end * CB, in_plane, in_row, w, w_kb, b,
+                                     orow + (size_t)main_end * CB, out_plane, d->fuse_silu);
+                    else if (OWd - main_end == 1)
+                        ukr_bs<4, 1>(Cb, irow + (size_t)main_end * CB, in_plane, in_row, w, w_kb, b,
+                                     orow + (size_t)main_end * CB, out_plane, d->fuse_silu);
+                } else { /* last 2 blocks when K/8 % 4 == 2: v2's 2x5 microkernel */
+                    for (int ow = 0; ow < OWd; ow += 5)
+                        ukr<2, 5>(Cb, irow + (size_t)ow * CB, in_plane, Wp, w, w_kb, b,
+                                  orow + (size_t)ow * CB, out_plane, d->fuse_silu);
+                }
+            }
+}
+
 /* ------------------------------------------------------------- versions ---- */
+void conv3x3_s1_v8(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_bs43<false>(d, in, wp, bias, out, false); /* 4x3 broadcast-stationary, intrinsics, 1 core */
+}
+void conv3x3_s1_v2a(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_2x5asm(d, in, wp, bias, out); /* v2's tile, inner step in inline asm, 1 core */
+}
+void conv3x3_s1_v8a(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_bs43<true>(d, in, wp, bias, out, false);  /* 4x3, inner step in inline asm, 1 core */
+}
+void conv3x3_s1_v8mt(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_bs43<true>(d, in, wp, bias, out, true);   /* v8a + OpenMP */
+}
 void conv3x3_s1_v6(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     conv3x3_s1_tuned<9, false>(d, in, wp, bias, out, false); /* all 9 taps unrolled */
 }
@@ -444,6 +988,7 @@ void pack_weights_s1_kb2(const float *w, int K, int C, int R, int S, float *dst)
 S1_FALLBACK(conv3x3_s1_v1) S1_FALLBACK(conv3x3_s1_v2) S1_FALLBACK(conv3x3_s1_v3)
 S1_FALLBACK(conv3x3_s1_v4) S1_FALLBACK(conv3x3_s1_v4b)
 S1_FALLBACK(conv3x3_s1_v6) S1_FALLBACK(conv3x3_s1_v6b) S1_FALLBACK(conv3x3_s1_v7) S1_FALLBACK(conv3x3_s1_v7b) S1_FALLBACK(conv3x3_s1_v7mt)
+S1_FALLBACK(conv3x3_s1_v2a) S1_FALLBACK(conv3x3_s1_v8) S1_FALLBACK(conv3x3_s1_v8a) S1_FALLBACK(conv3x3_s1_v8mt)
 /* v5 reads the v5 weight order, so its fallback must too: a plain scalar loop over that order */
 void conv3x3_s1_v5(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     const int Cb = ceil_div(d->C, CB), Kb = ceil_div(d->K, CB);

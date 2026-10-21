@@ -40,7 +40,7 @@ For each image $n$, output channel $k$ and output pixel $(h,w)$:
 \end{itemize}
 
 \section{Performance peak}
-\textbf{Machine.} ece028: Intel Xeon E5-2640 v4 (Broadwell-EP), 2 sockets $\times$ 10 cores (Hyper-Threading, 40 threads, 2 NUMA nodes), 2.4\,GHz base; a single busy core measured 3.39\,GHz (turbo). 32\,KB L1D and 256\,KB L2 per core, 25\,MB L3 per socket. GCC, \code{-O3 -march=broadwell -fopenmp}. Cycles are read from the core cycle counter (\code{perf\_event}), so turbo does not distort FLOPs/cycle.
+\textbf{Machine.} ece028: Intel Xeon E5-2640 v4 (Broadwell-EP), 2 sockets $\times$ 10 cores (Hyper-Threading, 40 threads, 2 NUMA nodes), 2.4\,GHz base; a single busy core measured 3.39\,GHz (turbo). 32\,KB L1D and 256\,KB L2 per core, 25\,MB L3 per socket. GCC 8.5.0 (Red Hat 8.5.0-28), \code{-O3 -march=broadwell -mtune=broadwell -fopenmp}. Cycles are read from the core cycle counter (\code{perf\_event}), so turbo does not distort FLOPs/cycle.
 
 \begin{table}[H]\centering\small
 \begin{tabular}{lllll}

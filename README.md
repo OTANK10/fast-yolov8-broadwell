@@ -1,7 +1,7 @@
 # Fast YOLOv8n on Intel Broadwell (ece028)
 
 **CMU 18-645: How to Write Fast Code — Fall 2026**  
-**Status:** Shared harness, layouts, per-layer data dumps and baselines are in. Stride-1 is measured on ece028: `s1_v2` reaches 77% of peak on one core (24.7 FLOPs/cycle over all 32 layers) and `s1_v3` runs 13.5× faster on 20 cores; see `docs/milestone/om/`. Stride-2, 1×1 and SPPF are correct scalar fallbacks waiting for their owners.
+**Status:** Shared harness, layouts, per-layer data dumps and baselines are in. Stride-1 is measured on ece028: `s1_v2` reaches 77% of peak on one core (24.7 FLOPs/cycle over all 32 layers) and `s1_v3` runs 13.5× faster on 20 cores; see `docs/milestone/` (design_report.pdf) and `docs/milestone/om/`. Stride-2, 1×1 and SPPF are correct scalar fallbacks waiting for their owners.
 
 ## Start here (5 minutes)
 
@@ -39,7 +39,7 @@ We are **not training YOLO**. We are rebuilding selected YOLOv8n inference opera
 
 Om owns **3×3, stride-1 FP32 convolution**: the 20 C2f bottleneck layers plus the 12 stride-1 layers in the Detect head, which the same kernel handles (32 layers, 66% of the model's FLOPs). Design notes: [docs/STRIDE1_GUIDE.md](docs/STRIDE1_GUIDE.md).
 
-**Current state:** a staircase of versions, each removing one bottleneck: `s1_v0` scalar, `s1_v1` AVX2 with 1 accumulator, `s1_v2` 2×5 register tile (10 accumulators, 1 core), `s1_v3` v2 + OpenMP, plus a tile-shape sweep (`scripts/tile_sweep.sh`). All pass on all 32 real layers. Measured on ece028 (GCC 8.5.0): v1 3.2, v2 24.7 FLOPs/cycle (77% of peak), v4/v5 (2×6 tile, packing) no faster; report and slides in `docs/milestone/om/`.
+**Current state:** a staircase of versions, each removing one bottleneck: `s1_v0` scalar, `s1_v1` AVX2 with 1 accumulator, `s1_v2` 2×5 register tile (10 accumulators, 1 core), `s1_v3` v2 + OpenMP, plus a tile-shape sweep (`scripts/tile_sweep.sh`). All pass on all 32 real layers. Measured on ece028 (GCC 8.5.0): v1 3.2, v2 24.7 FLOPs/cycle (77% of peak), v4/v5 (2×6 tile, packing) no faster; report and slides in `docs/milestone/` (design_report.pdf) and `docs/milestone/om/`.
 
 ## Who owns what
 

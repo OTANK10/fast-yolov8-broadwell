@@ -1,0 +1,166 @@
+idx,layer,block,kind,out,ms,macs,gflops
+0,trlayout.0,-,Layout transform,,2.853,0,0.0
+1,/model.0/conv/Conv,model.0,Conv 3x3 s2,16x320x320,6.9192,44236800,12.7867
+2,/model.1/conv/Conv,model.1,Conv 3x3 s2,32x160x160,5.5568,117964800,42.4579
+3,/model.2/cv1/conv/Conv,model.2,Conv 1x1 s1,32x160x160,1.9455,26214400,26.9492
+4,trlayout.1,-,Layout transform,,0.4263,0,0.0
+5,/model.2/Split,model.2,Split,16x160x160,0.3672,0,0.0
+6,trlayout.2,-,Layout transform,,0.1261,0,0.0
+7,/model.2/m.0/cv1/conv/Conv,model.2,Conv 3x3 s1,16x160x160,2.7649,58982400,42.6646
+8,/model.2/m.0/cv2/conv/Conv,model.2,Conv 3x3 s1,16x160x160,2.7429,58982400,43.0068
+9,trlayout.3,-,Layout transform,,0.2101,0,0.0
+10,/model.2/m.0/Add,model.2,Add,16x160x160,0.1503,0,0.0
+11,/model.2/Concat,model.2,Concat,48x160x160,0.6571,0,0.0
+12,trlayout.4,-,Layout transform,,0.4083,0,0.0
+13,/model.2/cv2/conv/Conv,model.2,Conv 1x1 s1,32x160x160,2.3802,39321600,33.0407
+14,/model.3/conv/Conv,model.3,Conv 3x3 s2,64x80x80,5.0036,117964800,47.1516
+15,/model.4/cv1/conv/Conv,model.4,Conv 1x1 s1,64x80x80,1.1406,26214400,45.9643
+16,trlayout.5,-,Layout transform,,0.1155,0,0.0
+17,/model.4/Split,model.4,Split,32x80x80,0.0973,0,0.0
+18,trlayout.6,-,Layout transform,,0.0577,0,0.0
+19,/model.4/m.0/cv1/conv/Conv,model.4,Conv 3x3 s1,32x80x80,2.6798,58982400,44.0193
+20,/model.4/m.0/cv2/conv/Conv,model.4,Conv 3x3 s1,32x80x80,2.6669,58982400,44.2323
+21,trlayout.7,-,Layout transform,,0.0577,0,0.0
+22,/model.4/m.0/Add,model.4,Add,32x80x80,0.0743,0,0.0
+23,trlayout.8,-,Layout transform,,0.06,0,0.0
+24,/model.4/m.1/cv1/conv/Conv,model.4,Conv 3x3 s1,32x80x80,2.6733,58982400,44.127
+25,/model.4/m.1/cv2/conv/Conv,model.4,Conv 3x3 s1,32x80x80,2.6716,58982400,44.1549
+26,trlayout.9,-,Layout transform,,0.0577,0,0.0
+27,/model.4/m.1/Add,model.4,Add,32x80x80,0.0747,0,0.0
+28,/model.4/Concat,model.4,Concat,128x80x80,0.4637,0,0.0
+29,trlayout.10,-,Layout transform,,0.2357,0,0.0
+30,/model.4/cv2/conv/Conv,model.4,Conv 1x1 s1,64x80x80,1.7303,52428800,60.5992
+31,/model.5/conv/Conv,model.5,Conv 3x3 s2,128x40x40,5.5786,117964800,42.292
+32,/model.6/cv1/conv/Conv,model.6,Conv 1x1 s1,128x40x40,0.8943,26214400,58.6223
+33,trlayout.11,-,Layout transform,,0.058,0,0.0
+34,/model.6/Split,model.6,Split,64x40x40,0.05,0,0.0
+35,trlayout.12,-,Layout transform,,0.0301,0,0.0
+36,/model.6/m.0/cv1/conv/Conv,model.6,Conv 3x3 s1,64x40x40,1.5623,58982400,75.5081
+37,/model.6/m.0/cv2/conv/Conv,model.6,Conv 3x3 s1,64x40x40,1.579,58982400,74.7072
+38,trlayout.13,-,Layout transform,,0.0287,0,0.0
+39,/model.6/m.0/Add,model.6,Add,64x40x40,0.0397,0,0.0
+40,trlayout.14,-,Layout transform,,0.0307,0,0.0
+41,/model.6/m.1/cv1/conv/Conv,model.6,Conv 3x3 s1,64x40x40,1.5542,58982400,75.8983
+42,/model.6/m.1/cv2/conv/Conv,model.6,Conv 3x3 s1,64x40x40,1.5488,58982400,76.1642
+43,trlayout.15,-,Layout transform,,0.0289,0,0.0
+44,/model.6/m.1/Add,model.6,Add,64x40x40,0.0392,0,0.0
+45,/model.6/Concat,model.6,Concat,256x40x40,0.2305,0,0.0
+46,trlayout.16,-,Layout transform,,0.1288,0,0.0
+47,/model.6/cv2/conv/Conv,model.6,Conv 1x1 s1,128x40x40,1.8882,52428800,55.5317
+48,/model.7/conv/Conv,model.7,Conv 3x3 s2,256x20x20,6.4355,117964800,36.6606
+49,/model.8/cv1/conv/Conv,model.8,Conv 1x1 s1,256x20x20,0.9369,26214400,55.9625
+50,trlayout.17,-,Layout transform,,0.0297,0,0.0
+51,/model.8/Split,model.8,Split,128x20x20,0.0268,0,0.0
+52,trlayout.18,-,Layout transform,,0.0161,0,0.0
+53,/model.8/m.0/cv1/conv/Conv,model.8,Conv 3x3 s1,128x20x20,1.5635,58982400,75.4478
+54,/model.8/m.0/cv2/conv/Conv,model.8,Conv 3x3 s1,128x20x20,1.5383,58982400,76.6841
+55,trlayout.19,-,Layout transform,,0.0147,0,0.0
+56,/model.8/m.0/Add,model.8,Add,128x20x20,0.0204,0,0.0
+57,/model.8/Concat,model.8,Concat,384x20x20,0.0394,0,0.0
+58,trlayout.20,-,Layout transform,,0.0462,0,0.0
+59,/model.8/cv2/conv/Conv,model.8,Conv 1x1 s1,256x20x20,1.704,39321600,46.153
+60,/model.9/cv1/conv/Conv,model.9,Conv 1x1 s1,128x20x20,0.5318,13107200,49.2907
+61,/model.9/m/MaxPool,model.9,MaxPool,128x20x20,0.2147,0,0.0
+62,/model.9/m_1/MaxPool,model.9,MaxPool,128x20x20,0.211,0,0.0
+63,/model.9/m_2/MaxPool,model.9,MaxPool,128x20x20,0.21,0,0.0
+64,/model.9/Concat,model.9,Concat,512x20x20,0.1383,0,0.0
+65,/model.9/cv2/conv/Conv,model.9,Conv 1x1 s1,256x20x20,2.3346,52428800,44.9146
+66,/model.10/Resize,model.10,Resize,256x40x40,0.2708,0,0.0
+67,/model.11/Concat,model.11,Concat,384x40x40,0.2389,0,0.0
+68,/model.12/cv1/conv/Conv,model.12,Conv 1x1 s1,128x40x40,3.3664,78643200,46.7229
+69,trlayout.21,-,Layout transform,,0.0582,0,0.0
+70,/model.12/Split,model.12,Split,64x40x40,0.0499,0,0.0
+71,trlayout.22,-,Layout transform,,0.0304,0,0.0
+72,/model.12/m.0/cv1/conv/Conv,model.12,Conv 3x3 s1,64x40x40,1.536,58982400,76.799
+73,/model.12/m.0/cv2/conv/Conv,model.12,Conv 3x3 s1,64x40x40,1.5439,58982400,76.4064
+74,trlayout.23,-,Layout transform,,0.0291,0,0.0
+75,/model.12/Concat,model.12,Concat,192x40x40,0.0746,0,0.0
+76,trlayout.24,-,Layout transform,,0.0899,0,0.0
+77,/model.12/cv2/conv/Conv,model.12,Conv 1x1 s1,128x40x40,1.2037,39321600,65.3356
+78,/model.13/Resize,model.13,Resize,128x80x80,0.5327,0,0.0
+79,/model.14/Concat,model.14,Concat,192x80x80,0.6797,0,0.0
+80,/model.15/cv1/conv/Conv,model.15,Conv 1x1 s1,64x80x80,2.3584,78643200,66.6909
+81,trlayout.25,-,Layout transform,,0.1154,0,0.0
+82,/model.15/Split,model.15,Split,32x80x80,0.0974,0,0.0
+83,trlayout.26,-,Layout transform,,0.0579,0,0.0
+84,/model.15/m.0/cv1/conv/Conv,model.15,Conv 3x3 s1,32x80x80,2.6687,58982400,44.2031
+85,/model.15/m.0/cv2/conv/Conv,model.15,Conv 3x3 s1,32x80x80,2.6878,58982400,43.8882
+86,trlayout.27,-,Layout transform,,0.0577,0,0.0
+87,/model.15/Concat,model.15,Concat,96x80x80,0.1461,0,0.0
+88,trlayout.28,-,Layout transform,,0.1746,0,0.0
+89,/model.15/cv2/conv/Conv,model.15,Conv 1x1 s1,64x80x80,1.4707,39321600,53.4723
+90,/model.16/conv/Conv,model.16,Conv 3x3 s2,64x40x40,2.8263,58982400,41.7377
+91,/model.22/cv2.0/cv2.0.0/conv/Conv,model.22,Conv 3x3 s1,64x80x80,6.3936,235929600,73.8019
+92,/model.22/cv3.0/cv3.0.0/conv/Conv,model.22,Conv 3x3 s1,80x80x80,7.9652,294912000,74.0499
+93,/model.17/Concat,model.17,Concat,192x40x40,0.0736,0,0.0
+94,/model.22/cv2.0/cv2.0.1/conv/Conv,model.22,Conv 3x3 s1,64x80x80,6.3975,235929600,73.7564
+95,/model.22/cv3.0/cv3.0.1/conv/Conv,model.22,Conv 3x3 s1,80x80x80,10.0141,368640000,73.624
+96,/model.18/cv1/conv/Conv,model.18,Conv 1x1 s1,128x40x40,1.1818,39321600,66.5439
+97,/model.22/cv2.0/cv2.0.2/Conv,model.22,Conv 1x1 s1,64x80x80,0.669,26214400,78.3734
+98,/model.22/cv3.0/cv3.0.2/Conv,model.22,Conv 1x1 s1,80x80x80,1.0271,40960000,79.7558
+99,trlayout.29,-,Layout transform,,0.0581,0,0.0
+100,/model.18/Split,model.18,Split,64x40x40,0.0517,0,0.0
+101,trlayout.30,-,Layout transform,,0.1172,0,0.0
+102,/model.22/Reshape,model.22,Reshape,64x6400,0.0021,0,0.0
+103,trlayout.31,-,Layout transform,,0.1502,0,0.0
+104,/model.22/Reshape_3,model.22,Reshape,80x6400,0.0005,0,0.0
+105,trlayout.32,-,Layout transform,,0.0313,0,0.0
+106,/model.18/m.0/cv1/conv/Conv,model.18,Conv 3x3 s1,64x40x40,1.5539,58982400,75.9156
+107,/model.18/m.0/cv2/conv/Conv,model.18,Conv 3x3 s1,64x40x40,1.5389,58982400,76.6568
+108,trlayout.33,-,Layout transform,,0.0288,0,0.0
+109,/model.18/Concat,model.18,Concat,192x40x40,0.0743,0,0.0
+110,trlayout.34,-,Layout transform,,0.0901,0,0.0
+111,/model.18/cv2/conv/Conv,model.18,Conv 1x1 s1,128x40x40,1.1842,39321600,66.4078
+112,/model.19/conv/Conv,model.19,Conv 3x3 s2,128x20x20,3.2225,58982400,36.6067
+113,/model.22/cv2.1/cv2.1.0/conv/Conv,model.22,Conv 3x3 s1,64x40x40,3.2082,117964800,73.5393
+114,/model.22/cv3.1/cv3.1.0/conv/Conv,model.22,Conv 3x3 s1,80x40x40,3.984,147456000,74.0233
+115,/model.20/Concat,model.20,Concat,384x20x20,0.0408,0,0.0
+116,/model.22/cv2.1/cv2.1.1/conv/Conv,model.22,Conv 3x3 s1,64x40x40,1.5418,58982400,76.509
+117,/model.22/cv3.1/cv3.1.1/conv/Conv,model.22,Conv 3x3 s1,80x40x40,2.3898,92160000,77.1273
+118,/model.21/cv1/conv/Conv,model.21,Conv 1x1 s1,256x20x20,1.7451,39321600,45.0662
+119,/model.22/cv2.1/cv2.1.2/Conv,model.22,Conv 1x1 s1,64x40x40,0.1616,6553600,81.094
+120,/model.22/cv3.1/cv3.1.2/Conv,model.22,Conv 1x1 s1,80x40x40,0.2437,10240000,84.0545
+121,trlayout.35,-,Layout transform,,0.0302,0,0.0
+122,/model.21/Split,model.21,Split,128x20x20,0.0263,0,0.0
+123,trlayout.36,-,Layout transform,,0.0283,0,0.0
+124,/model.22/Reshape_1,model.22,Reshape,64x1600,0.0007,0,0.0
+125,trlayout.37,-,Layout transform,,0.0368,0,0.0
+126,/model.22/Reshape_4,model.22,Reshape,80x1600,0.0005,0,0.0
+127,trlayout.38,-,Layout transform,,0.0165,0,0.0
+128,/model.21/m.0/cv1/conv/Conv,model.21,Conv 3x3 s1,128x20x20,1.5677,58982400,75.2464
+129,/model.21/m.0/cv2/conv/Conv,model.21,Conv 3x3 s1,128x20x20,1.5304,58982400,77.0792
+130,trlayout.39,-,Layout transform,,0.0146,0,0.0
+131,/model.21/Concat,model.21,Concat,384x20x20,0.039,0,0.0
+132,trlayout.40,-,Layout transform,,0.0509,0,0.0
+133,/model.21/cv2/conv/Conv,model.21,Conv 1x1 s1,256x20x20,1.7353,39321600,45.3208
+134,/model.22/cv2.2/cv2.2.0/conv/Conv,model.22,Conv 3x3 s1,64x20x20,1.6453,58982400,71.6988
+135,/model.22/cv3.2/cv3.2.0/conv/Conv,model.22,Conv 3x3 s1,80x20x20,2.0688,73728000,71.2762
+136,/model.22/cv2.2/cv2.2.1/conv/Conv,model.22,Conv 3x3 s1,64x20x20,0.4036,14745600,73.0747
+137,/model.22/cv3.2/cv3.2.1/conv/Conv,model.22,Conv 3x3 s1,80x20x20,0.6213,23040000,74.1665
+138,/model.22/cv2.2/cv2.2.2/Conv,model.22,Conv 1x1 s1,64x20x20,0.0447,1638400,73.2345
+139,/model.22/cv3.2/cv3.2.2/Conv,model.22,Conv 1x1 s1,80x20x20,0.0664,2560000,77.1484
+140,trlayout.41,-,Layout transform,,0.0074,0,0.0
+141,/model.22/Reshape_2,model.22,Reshape,64x400,0.0007,0,0.0
+142,trlayout.42,-,Layout transform,,0.0105,0,0.0
+143,/model.22/Reshape_5,model.22,Reshape,80x400,0.0005,0,0.0
+144,/model.22/Concat,model.22,Concat,64x8400,0.1643,0,0.0
+145,/model.22/Concat_1,model.22,Concat,80x8400,0.2416,0,0.0
+146,/model.22/dfl/Reshape,model.22,Reshape,4x16x8400,0.0006,0,0.0
+147,/model.22/Sigmoid,model.22,Sigmoid,80x8400,0.6964,0,0.0
+148,/model.22/dfl/Transpose,model.22,Transpose,8400x4x16,0.7026,0,0.0
+149,/model.22/dfl/Softmax,model.22,Softmax,8400x4x16,1.5049,0,0.0
+150,/model.22/dfl/Transpose_1,model.22,Transpose,16x4x8400,1.1922,0,0.0
+151,trlayout.43,-,Layout transform,,0.1552,0,0.0
+152,/model.22/dfl/conv/Conv,model.22,Conv 1x1 s1,1x4x8400,0.2526,537600,4.2564
+153,trlayout.44,-,Layout transform,,0.0362,0,0.0
+154,/model.22/dfl/Reshape_1,model.22,Reshape,4x8400,0.0007,0,0.0
+155,/model.22/Slice,model.22,Slice,2x8400,0.0082,0,0.0
+156,/model.22/Slice_1,model.22,Slice,2x8400,0.0045,0,0.0
+157,/model.22/Sub,model.22,Sub,2x8400,0.0138,0,0.0
+158,/model.22/Add_1,model.22,Add,2x8400,0.0122,0,0.0
+159,/model.22/Add_2,model.22,Add,2x8400,0.0053,0,0.0
+160,/model.22/Sub_1,model.22,Sub,2x8400,0.0058,0,0.0
+161,/model.22/Div_1,model.22,Div,2x8400,0.0091,0,0.0
+162,/model.22/Concat_2,model.22,Concat,4x8400,0.0073,0,0.0
+163,/model.22/Mul_2,model.22,Mul,4x8400,0.0229,0,0.0
+164,/model.22/Concat_3,model.22,Concat,84x8400,0.4767,0,0.0

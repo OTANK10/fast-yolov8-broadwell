@@ -18,7 +18,7 @@ for t in "${tiles[@]}"; do
   kb=${t:1:1}; ow=${t#*x}; acc=$((kb * ow)); regs=$((acc + kb + 1))
   for L in "${layers[@]}"; do
     line=$(./build/bench_layer "data/tensors/b1/$L" "s1_$t" -r "$reps" --csv)
-    IFS=, read -r _ _ _ C _ _ _ _ _ _ _ _ _ _ _ fpc pct _ _ pass <<< "$line"
+    IFS=, read -r _ _ _ C _ _ _ _ _ _ _ _ _ _ _ fpc pct _ _ pass _ <<< "$line"
     echo "$t,$acc,$regs,$L,$C,$fpc,$pct,$pass" >> "$out"
   done
 done

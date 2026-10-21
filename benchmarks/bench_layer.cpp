@@ -231,9 +231,9 @@ int main(int argc, char **argv) {
 
     const char *layer = strrchr(dir, '/') ? strrchr(dir, '/') + 1 : dir;
     if (csv)
-        printf("%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,%s,%.3f,%.2f,%.2f,%.3e,%d\n", layer, kname,
+        printf("%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,%s,%.3f,%.2f,%.2f,%.3e,%d,%.1f\n", layer, kname,
                d.N, d.C, d.H, d.W, d.K, d.R, d.S, d.stride, threads, flops, best, med, src, fpc, pct, gflops,
-               max_err, pass);
+               max_err, pass, secs * 1e6);
     else
         printf("  threads=%d  %.3g FLOPs  best %.0f %s-cycles (median %.0f)  time %.1f us  ->  %.2f FLOPs/cycle"
                "  = %.1f%% of %d-core peak  (%.1f GFLOP/s, TSC %.2f GHz)\n",

@@ -30,7 +30,8 @@ static conv_desc_t make_desc(int N, int C, int H, int W, int K, int R, int strid
 }
 
 // Run `fn` through the blocked layouts and compare with the NCHW reference.
-static double check_kernel(const char *name, conv_fn_t fn, conv_desc_t d, std::mt19937 &rng) {
+static double check_kernel(const char *name, conv_fn_t fn, conv_desc_t d, std::mt19937 &rng,
+                           pack_fn_t pack = pack_weights) {
     std::normal_distribution<float> nd(0.0f, 1.0f);
     std::vector<float> x((size_t)d.N * d.C * d.H * d.W), w((size_t)d.K * d.C * d.R * d.S), b(d.K);
     for (auto &v : x) v = nd(rng);
@@ -46,7 +47,7 @@ static double check_kernel(const char *name, conv_fn_t fn, conv_desc_t d, std::m
     float *out = alloc_aligned(blk_size(d.N, d.K, d.OH, d.OW, d.out_halo));
     for (int k = 0; k < d.K; k++) bp[k] = b[k];
     nchw_to_blk(x.data(), d.N, d.C, d.H, d.W, d.in_halo, xin);
-    pack_weights(w.data(), d.K, d.C, d.R, d.S, wp);
+    pack(w.data(), d.K, d.C, d.R, d.S, wp);
     fn(&d, xin, wp, bp, out);
     blk_to_nchw(out, d.N, d.K, d.OH, d.OW, d.out_halo, got.data());
 
@@ -97,6 +98,15 @@ int main() {
         worst = std::fmax(worst, check_kernel("s1_v2", conv3x3_s1_v2, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
         worst = std::fmax(worst, check_kernel("s1_v3", conv3x3_s1_v3, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
     }
+    // v4/v4b/v5 tails: widths that leave 0, 1, 2, 3, 4 and 5 pixels after the 6-wide tiles
+    for (int Wd : {6, 7, 8, 9, 10, 11, 20, 40})
+        for (int C : {16, 64}) {
+            worst = std::fmax(worst, check_kernel("s1_v4", conv3x3_s1_v4, make_desc(1, C, 5, Wd, 32, 3, 1, 1), rng));
+            worst = std::fmax(worst, check_kernel("s1_v4b", conv3x3_s1_v4b, make_desc(1, C, 5, Wd, 32, 3, 1, 1), rng));
+            worst = std::fmax(worst, check_kernel("s1_v5", conv3x3_s1_v5, make_desc(1, C, 5, Wd, 32, 3, 1, 1), rng, pack_weights_s1_kb2));
+        }
+    worst = std::fmax(worst, check_kernel("s1_v5", conv3x3_s1_v5, make_desc(1, 256, 10, 10, 80, 3, 1, 1), rng, pack_weights_s1_kb2));
+    worst = std::fmax(worst, check_kernel("s1_v5", conv3x3_s1_v5, make_desc(2, 32, 8, 8, 16, 3, 1, 0), rng, pack_weights_s1_kb2));
     worst = std::fmax(worst, check_kernel("s1_v3", conv3x3_s1_v3, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
     {   // every sweep tile on one shape where all of them apply (K/8 = 4, width 20)
         conv_fn_t tiles[] = {conv3x3_s1_t1x1, conv3x3_s1_t1x2, conv3x3_s1_t1x4, conv3x3_s1_t1x5, conv3x3_s1_t1x10,

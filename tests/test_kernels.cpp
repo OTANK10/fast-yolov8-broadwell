@@ -106,6 +106,9 @@ int main() {
         worst = std::fmax(worst, check_kernel("s1_v2a", conv3x3_s1_v2a, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
         worst = std::fmax(worst, check_kernel("s1_v8a", conv3x3_s1_v8a, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
         worst = std::fmax(worst, check_kernel("s1_v8mt", conv3x3_s1_v8mt, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v8b", conv3x3_s1_v8b, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v9", conv3x3_s1_v9, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v9mt", conv3x3_s1_v9mt, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
     }
     // v4/v4b/v5 tails: widths that leave 0, 1, 2, 3, 4 and 5 pixels after the 6-wide tiles
     for (int Wd : {6, 7, 8, 9, 10, 11, 20, 40})
@@ -119,11 +122,12 @@ int main() {
     worst = std::fmax(worst, check_kernel("s1_v3", conv3x3_s1_v3, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
     worst = std::fmax(worst, check_kernel("s1_v7", conv3x3_s1_v7, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
     worst = std::fmax(worst, check_kernel("s1_v7mt", conv3x3_s1_v7mt, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
-    for (int Wd : {6, 7, 8, 20, 40})  // v8 row tails: 0, 1, 2 pixels after the 3-wide tiles; K/8 = 4, 10, 2
+    for (int Wd : {6, 7, 8, 10, 15, 20, 25, 40})  // v8 row tails: 0, 1, 2 pixels after the 3-wide tiles; K/8 = 4, 10, 2
         for (int K : {32, 80, 16})
         {
             worst = std::fmax(worst, check_kernel("s1_v8", conv3x3_s1_v8, make_desc(1, 64, 5, Wd, K, 3, 1, 1), rng));
             worst = std::fmax(worst, check_kernel("s1_v8a", conv3x3_s1_v8a, make_desc(1, 64, 5, Wd, K, 3, 1, 1), rng));
+            worst = std::fmax(worst, check_kernel("s1_v8b", conv3x3_s1_v8b, make_desc(1, 64, 5, Wd, K, 3, 1, 1), rng));
         }
     worst = std::fmax(worst, check_kernel("s1_v8mt", conv3x3_s1_v8mt, make_desc(2, 32, 10, 10, 64, 3, 1, 0), rng));
     {   // every sweep tile on one shape where all of them apply (K/8 = 4, width 20)

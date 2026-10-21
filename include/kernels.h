@@ -37,6 +37,9 @@ FASTYOLO_CONV_DECL(conv3x3_s1_v8)   // 4x3 broadcast-stationary tile (12 acc, 7 
 FASTYOLO_CONV_DECL(conv3x3_s1_v2a)  // v2's 2x5 tile, inner step in inline asm (control for v8a)
 FASTYOLO_CONV_DECL(conv3x3_s1_v8a)  // v8 with the inner step in inline asm (no spills)
 FASTYOLO_CONV_DECL(conv3x3_s1_v8mt) // v8a + OpenMP
+FASTYOLO_CONV_DECL(conv3x3_s1_v8b)  // v8a, row remainders by 2x5 tiles
+FASTYOLO_CONV_DECL(conv3x3_s1_v9)   // per-layer dispatch: v8b (C <= 80) or v2 (C >= 128), 1 core
+FASTYOLO_CONV_DECL(conv3x3_s1_v9mt) // v9 + OpenMP
 // Weight packer for v5: [Kb/2][Cb][3][3][8 ic][2][8 oc]. Same size as pack_weights.
 void pack_weights_s1_kb2(const float *oihw, int K, int C, int R, int S, float *dst);
 typedef void (*pack_fn_t)(const float *oihw, int K, int C, int R, int S, float *dst);

@@ -33,6 +33,10 @@
  *       writes the inner step in inline asm with the registers fixed by hand.
  *       v8mt = v8a on all cores. v2a = v2's 2x5 tile in the same inline asm
  *       (control: separates register allocation from tile shape).
+ *       Measured: v8a 80-82% on the wide head layers (best yet), but loses on
+ *       20/40-wide rows (4x2/4x1 tails) and C >= 128 (4-block weights > L2).
+ *   v8b v8a with row remainders done by 2x5 tiles (no small tiles).
+ *   v9  per-layer dispatch: v8b for C <= 80, v2 for C >= 128. v9mt = all cores.
  *
  *   s1_t<KB>x<OW>  the same microkernel with other tile shapes, single thread,
  *       for the "how many accumulators do I need?" experiment
@@ -850,7 +854,7 @@ static void conv3x3_s1_2x5asm(const conv_desc_t *d, const float *in, const float
             }
 }
 
-template <bool ASM>
+template <bool ASM, bool TAIL5 = false>
 static void conv3x3_s1_bs43(const conv_desc_t *d, const float *in, const float *wp,
                             const float *bias, float *out, bool threads) {
     const int Cb = ceil_div(d->C, CB), Kb = ceil_div(d->K, CB);
@@ -867,7 +871,14 @@ static void conv3x3_s1_bs43(const conv_desc_t *d, const float *in, const float *
     const size_t in_row = (size_t)Wp * CB, w_kb = (size_t)Cb * 9 * CB * CB;
     const int N = d->N, OH = d->OH, OWd = d->OW, oh_ = d->out_halo;
     const int G4 = Kb / 4, G = G4 + (Kb % 4 ? 1 : 0); /* groups of 4 blocks, then one pair */
-    const int main_end = OWd - OWd % 3;
+    /* TAIL5 (v8b): end the 3-wide tiles where the remainder is a multiple of 5,
+     * and finish the row with v2's 2x5 tile (two pairs of blocks), so no row
+     * ever runs a 4x2 or 4x1 tile: 20 = 15+5, 40 = 30+10, 80 = 75+5, 160 = 150+10. */
+    int main_end = OWd - OWd % 3, m5 = main_end;
+    if (TAIL5)
+        while (m5 > 0 && (OWd - m5) % 5 != 0) m5 -= 3;
+    const bool tail5 = TAIL5 && (OWd - m5) % 5 == 0;
+    if (tail5) main_end = m5; /* otherwise (e.g. width 7) keep the 4x2 / 4x1 tails */
 
 #pragma omp parallel for collapse(3) schedule(static) if (threads)
     for (int n = 0; n < N; n++)
@@ -886,7 +897,12 @@ static void conv3x3_s1_bs43(const conv_desc_t *d, const float *in, const float *
                             ukr_bs<4, 3>(Cb, irow + (size_t)ow * CB, in_plane, in_row, w, w_kb, b,
                                          orow + (size_t)ow * CB, out_plane, d->fuse_silu);
                     }
-                    if (OWd - main_end == 2)
+                    if (tail5) {
+                        for (int ow = main_end; ow < OWd; ow += 5)
+                            for (int p = 0; p < 4; p += 2)
+                                ukr<2, 5>(Cb, irow + (size_t)ow * CB, in_plane, Wp, w + p * w_kb, w_kb, b + p * CB,
+                                          orow + (size_t)ow * CB + p * out_plane, out_plane, d->fuse_silu);
+                    } else if (OWd - main_end == 2)
                         ukr_bs<4, 2>(Cb, irow + (size_t)main_end * CB, in_plane, in_row, w, w_kb, b,
                                      orow + (size_t)main_end * CB, out_plane, d->fuse_silu);
                     else if (OWd - main_end == 1)
@@ -909,6 +925,22 @@ void conv3x3_s1_v2a(const conv_desc_t *d, const float *in, const float *wp, cons
 }
 void conv3x3_s1_v8a(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     conv3x3_s1_bs43<true>(d, in, wp, bias, out, false);  /* 4x3, inner step in inline asm, 1 core */
+}
+void conv3x3_s1_v8b(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_bs43<true, true>(d, in, wp, bias, out, false); /* v8a, row remainders done by 2x5 tiles */
+}
+/* v9: pick the microkernel per layer. v8b's 4-block tile streams 4*C*9*256 B
+ * of weights per call; at C >= 128 that is >= 1.1 MB, over 4x the 256 KB L2,
+ * and the weights come from L3 (measured: v8a 54-67% vs v2 69-79% there).
+ * Below that, v8b's lower loads-per-FMA wins. Until we cache-block the input
+ * channels (phase 2), the deep layers use v2's 2-block tile. */
+void conv3x3_s1_v9(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    if (d->C >= 128) conv3x3_s1_tiled<2, 5>(d, in, wp, bias, out, false);
+    else conv3x3_s1_bs43<true, true>(d, in, wp, bias, out, false);
+}
+void conv3x3_s1_v9mt(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    if (d->C >= 128) conv3x3_s1_tiled<2, 5>(d, in, wp, bias, out, true);
+    else conv3x3_s1_bs43<true, true>(d, in, wp, bias, out, true);
 }
 void conv3x3_s1_v8mt(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     conv3x3_s1_bs43<true>(d, in, wp, bias, out, true);   /* v8a + OpenMP */
@@ -989,6 +1021,7 @@ S1_FALLBACK(conv3x3_s1_v1) S1_FALLBACK(conv3x3_s1_v2) S1_FALLBACK(conv3x3_s1_v3)
 S1_FALLBACK(conv3x3_s1_v4) S1_FALLBACK(conv3x3_s1_v4b)
 S1_FALLBACK(conv3x3_s1_v6) S1_FALLBACK(conv3x3_s1_v6b) S1_FALLBACK(conv3x3_s1_v7) S1_FALLBACK(conv3x3_s1_v7b) S1_FALLBACK(conv3x3_s1_v7mt)
 S1_FALLBACK(conv3x3_s1_v2a) S1_FALLBACK(conv3x3_s1_v8) S1_FALLBACK(conv3x3_s1_v8a) S1_FALLBACK(conv3x3_s1_v8mt)
+S1_FALLBACK(conv3x3_s1_v8b) S1_FALLBACK(conv3x3_s1_v9) S1_FALLBACK(conv3x3_s1_v9mt)
 /* v5 reads the v5 weight order, so its fallback must too: a plain scalar loop over that order */
 void conv3x3_s1_v5(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     const int Cb = ceil_div(d->C, CB), Kb = ceil_div(d->K, CB);

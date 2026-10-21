@@ -1,0 +1,18 @@
+# Target (inference-only) machine: NO torch / ultralytics needed.
+# All wheels below are manylinux2010/2014/_2_28 -> install on glibc >= 2.28 (RHEL/Rocky 8).
+# Install:  python -m pip install -r requirements-infer.txt
+#
+# Python 3.6 (RHEL 8 system /usr/libexec/platform-python 3.6.8): newest versions with cp36
+# wheels. pip must be >= 19.3 to see these wheels (RHEL 8 ships pip 9.0.3), so run first:
+#   python3 -m pip install --upgrade "pip==21.3.1"      (inside the venv)
+# Tested: Python 3.6.8, Rocky Linux 8.10 userland, OpenCV 4.6.0, numpy 1.19.5.
+opencv-python-headless==4.6.0.66 ; python_version < "3.7"
+numpy==1.19.5 ; python_version < "3.7"
+
+# Python 3.7+ : OpenCV 5.0 wheel is cp37-abi3 (one wheel for all Python >= 3.7).
+# Tested: 3.8.20, 3.9.25, 3.10.20, 3.12.13/3.12.15 (Rocky 8.10), 3.13.16. (3.7 not tested.)
+opencv-python-headless==5.0.0.93 ; python_version >= "3.7"
+numpy==1.24.4 ; python_version >= "3.8" and python_version < "3.9"
+numpy==2.0.2 ; python_version >= "3.9" and python_version < "3.11"
+numpy==2.5.4 ; python_version >= "3.11"
+numpy==1.21.6 ; python_version >= "3.7" and python_version < "3.8"

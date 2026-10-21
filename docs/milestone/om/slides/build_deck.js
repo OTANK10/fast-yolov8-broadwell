@@ -244,9 +244,9 @@ s.addNotes("Same ONNX model, same images, single thread; baseline times converte
 
 // 10. Multi-core + next ---------------------------------------------------------------------------------
 s = pres.addSlide({ masterName: "TITLE_DARK", sectionTitle: "Layout" });
-s.addText("20 cores: 13.7× faster, 1,140 GFLOP/s", { placeholder: "title" });
-s.addText("v3 = v2 + OpenMP, 74% of the 20-core peak at base clock.  Next: software-pipelined microkernel for the last ~20%, cache blocking for the C=256 layers, NUMA-aware threading, batch 16.", { placeholder: "body" });
-s.addNotes("v3 runs all 32 layers in 5.1 ms on 20 cores versus 69.5 ms on one, 13.7 times, 1140 GFLOP/s. Next steps: software pipelining, cache blocking for the two 256-channel layers, NUMA first-touch and batch 16.");
+s.addText("20 cores: 13.5× faster, 1,127 GFLOP/s", { placeholder: "title" });
+s.addText("v3 = v2 + OpenMP, 73% of the 20-core peak at base clock (most layers 75–83%).  Next: software-pipelined microkernel for the last ~20%, cache blocking for the C=256 layers, NUMA-aware threading, batch 16.", { placeholder: "body" });
+s.addNotes("v3 runs all 32 layers in 5.15 ms on 20 cores versus 69.5 ms on one, 13.5 times, 1127 GFLOP/s. Two layers stay near 50 percent in two separate runs; likely memory placement across the two sockets, which is the next thing to test. Next steps: software pipelining, cache blocking for the two 256-channel layers, NUMA first-touch and batch 16.");
 
 const out = path.join(__dirname, "om_s1_kernel.pptx");
 pres.writeFile({ fileName: out }).then(async () => { await applyTheme(out, THEME); console.log("wrote", out); });

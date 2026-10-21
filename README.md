@@ -1,7 +1,7 @@
 # Fast YOLOv8n on Intel Broadwell (ece028)
 
 **CMU 18-645: How to Write Fast Code — Fall 2026**  
-**Status:** Shared harness, layouts, per-layer data dumps and baselines are in. Stride-1 is measured on ece028: `s1_v2` reaches 77% of peak on one core (24.7 FLOPs/cycle over all 32 layers) and `s1_v3` runs 13.7× faster on 20 cores; see `docs/milestone/om/`. Stride-2, 1×1 and SPPF are correct scalar fallbacks waiting for their owners.
+**Status:** Shared harness, layouts, per-layer data dumps and baselines are in. Stride-1 is measured on ece028: `s1_v2` reaches 77% of peak on one core (24.7 FLOPs/cycle over all 32 layers) and `s1_v3` runs 13.5× faster on 20 cores; see `docs/milestone/om/`. Stride-2, 1×1 and SPPF are correct scalar fallbacks waiting for their owners.
 
 ## Start here (5 minutes)
 

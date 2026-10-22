@@ -1,28 +1,35 @@
 /*
- * bench_ukr.cpp  --  the stride-1 MICROKERNEL alone, no layer around it.
+ * bench_ukr.cpp  --  the stride-1 MICROKERNEL alone, benchmarked like the
+ * Assignment 2 matrix-multiply kernel.
  *
- *   ./build/bench_ukr [C] [--no-silu] [--reps N] [--csv results/ukr_C<C>.csv]
+ * The 2x5 tile IS an Assignment-2-style outer-product kernel:
+ *     m = 5 output pixels (broadcast, like A)
+ *     n = 16 output channels = 2 vectors of 8 (loaded, like the B row)
+ *     k = C * 9 (input channels x 3x3 taps): the reduction
+ *     C = the 10 accumulators, stored once at the end (plus bias and SiLU)
+ * One call computes one m x n output tile over the whole k, nothing else:
+ * no layer loops, no row tails, no walk over image planes. The same small
+ * block of inputs and weights is reused on every call, so after warm-up it
+ * sits in L1 (or L2 once it outgrows 32 KB, which the sweep shows).
  *
- * Each register tile in S1_UKRS (src/conv3x3_s1.cpp) is called over and over
- * on the same small block of data: KB output-channel blocks x OW pixels, a
- * full reduction over C input channels x 3 x 3 taps, bias and SiLU included.
- * That is exactly one microkernel call inside a real layer, minus everything
- * the layer adds: no loops over rows and output blocks, no row tails, no
- * traversal of the NCHW8c planes, no cache misses (inputs and weights are
- * tiny and reused every call, so after warm-up they sit in L1/L2; the
- * "weights" column says which).
+ *   ./build/bench_ukr 32                          one C, every tile, table
+ *   ./build/bench_ukr --sweep 8 512 8 --runs 3 --tiles 2x5,2x6 --csv results/ukr_sweep.csv
+ *        k = 72 ... 4608, like the assignment's k = 32 ... 512 sweep
+ *   options: --no-silu  --reps N  --warmup SECONDS (default 2)
  *
- * Cycles are real core cycles (perf_event), so % of peak is honest under
- * turbo; pin it with `taskset -c 0`. Every tile is first checked against a
- * scalar reference on the same data (max relative error <= 1e-4).
+ * Cycles are real core cycles from perf_event (not TSC x 3.4/2.4 like the
+ * assignment driver), so % of peak is exact under turbo. Pin with taskset.
+ * Every tile is checked against a scalar reference at every C first.
  */
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <string>
 #include <vector>
 #include "common.h"
 #include "kernels.h"
@@ -58,78 +65,130 @@ static uint64_t perf_read(int fd) {
     return v;
 }
 
+/* Spin so the core is at full clock before anything is timed (the
+ * assignment's "2-second busy loop" fix). */
+static void busy_warmup(double seconds) {
+    auto t0 = std::chrono::steady_clock::now();
+    volatile double x = 1.0;
+    while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < seconds) x = x * 1.0000001 + 1e-9;
+}
+
+struct Data {
+    int C, Cb;
+    size_t in_row, in_plane, w_kb, o_kb;
+    float *in, *w, *b, *o, *ref;
+};
+static const int KBMAX = 4, OWMAX = 10;
+
+static Data make_data(int C) {
+    Data d;
+    d.C = C; d.Cb = C / CB;
+    d.in_row = (size_t)(OWMAX + 2) * CB; d.in_plane = 3 * d.in_row;
+    d.w_kb = (size_t)d.Cb * 9 * CB * CB; d.o_kb = (size_t)OWMAX * CB;
+    d.in = alloc_aligned(d.Cb * d.in_plane); d.w = alloc_aligned(KBMAX * d.w_kb);
+    d.b = alloc_aligned(KBMAX * CB); d.o = alloc_aligned(KBMAX * d.o_kb); d.ref = alloc_aligned(KBMAX * d.o_kb);
+    std::mt19937 rng(645 + C);
+    std::uniform_real_distribution<float> u(-1.f, 1.f);
+    for (size_t i = 0; i < d.Cb * d.in_plane; i++) d.in[i] = u(rng);
+    for (size_t i = 0; i < KBMAX * d.w_kb; i++) d.w[i] = u(rng) * 0.1f;
+    for (int i = 0; i < KBMAX * CB; i++) d.b[i] = u(rng);
+    return d;
+}
+static void free_data(Data &d) { free(d.in); free(d.w); free(d.b); free(d.o); free(d.ref); }
+
+struct Result { double flops, best, med, fpc, pct, rel, wkb, wskb; bool pass; };
+
+static Result run_tile(const s1_ukr_entry_t &k, Data &d, int fs, long reps, int trials, int pfd, double peak) {
+    Result r{};
+    memset(d.o, 0, KBMAX * d.o_kb * sizeof(float));
+    k.fn(d.Cb, d.in, d.in_plane, d.in_row, d.w, d.w_kb, d.b, d.o, d.o_kb, fs);
+    s1_ukr_reference(k.KB, k.OW, d.Cb, d.in, d.in_plane, d.in_row, d.w, d.w_kb, d.b, d.ref, d.o_kb, fs);
+    double err = 0, mx = 0;
+    for (int kb = 0; kb < k.KB; kb++)
+        for (int i = 0; i < k.OW * CB; i++) {
+            const size_t ix = kb * d.o_kb + i;
+            err = std::max(err, (double)std::fabs(d.o[ix] - d.ref[ix]));
+            mx = std::max(mx, (double)std::fabs(d.ref[ix]));
+        }
+    r.rel = err / std::max(mx, 1e-30);
+    r.pass = r.rel <= 1e-4;
+    r.flops = 2.0 * k.KB * CB * k.OW * (double)d.C * 9;
+    const long n = reps > 0 ? reps : std::max(1000L, (long)(1.5e8 / r.flops)); /* ~25-50 ms per trial */
+    for (long i = 0; i < n / 4; i++) k.fn(d.Cb, d.in, d.in_plane, d.in_row, d.w, d.w_kb, d.b, d.o, d.o_kb, fs);
+    std::vector<double> cyc;
+    for (int t = 0; t < trials; t++) {
+        uint64_t c0 = pfd >= 0 ? perf_read(pfd) : rdtsc();
+        for (long i = 0; i < n; i++) k.fn(d.Cb, d.in, d.in_plane, d.in_row, d.w, d.w_kb, d.b, d.o, d.o_kb, fs);
+        uint64_t c1 = pfd >= 0 ? perf_read(pfd) : rdtsc();
+        cyc.push_back((double)(c1 - c0) / n);
+    }
+    std::sort(cyc.begin(), cyc.end());
+    r.best = cyc[0]; r.med = cyc[cyc.size() / 2];
+    r.fpc = r.best > 0 ? r.flops / r.best : 0;
+    r.pct = 100 * r.fpc / peak;
+    r.wkb = k.KB * (double)d.C * 288 / 1024;                                  /* weights read per call */
+    r.wskb = r.wkb + 3.0 * (k.OW + 2) * d.C * 4 / 1024;                        /* + input rows touched */
+    return r;
+}
+
 int main(int argc, char **argv) {
-    int C = 32, fs = 1;
+    int C = 32, fs = 1, runs = 1, c0 = 0, c1 = 0, cstep = 8;
     long reps = 0;
+    double warm = 2.0;
     const char *csv = nullptr;
+    std::string tiles;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--no-silu")) fs = 0;
         else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = atol(argv[++i]);
         else if (!strcmp(argv[i], "--csv") && i + 1 < argc) csv = argv[++i];
+        else if (!strcmp(argv[i], "--runs") && i + 1 < argc) runs = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--warmup") && i + 1 < argc) warm = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--tiles") && i + 1 < argc) tiles = std::string(",") + argv[++i] + ",";
+        else if (!strcmp(argv[i], "--sweep") && i + 3 < argc) { c0 = atoi(argv[++i]); c1 = atoi(argv[++i]); cstep = atoi(argv[++i]); }
         else C = atoi(argv[i]);
     }
     if (S1_NUKRS == 0) { fprintf(stderr, "built without AVX2 (-DYOLO_ENABLE_BROADWELL=ON): no microkernels\n"); return 1; }
-    if (C < 8 || C % 8) { fprintf(stderr, "C must be a multiple of 8\n"); return 1; }
+    std::vector<int> Cs;
+    if (c0 > 0) for (int c = c0; c <= c1; c += cstep) Cs.push_back(c);
+    else Cs.push_back(C);
+    for (int c : Cs) if (c < 8 || c % 8) { fprintf(stderr, "C must be a multiple of 8 (got %d)\n", c); return 1; }
     const double peak = getenv("PEAK_FPC") ? atof(getenv("PEAK_FPC")) : PEAK_FLOPS_PER_CYCLE_PER_CORE;
-
-    /* One tile's worth of data for the largest tile (KB <= 4, OW <= 10). */
-    const int Cb = C / CB, KBMAX = 4, OWMAX = 10;
-    const size_t in_row = (size_t)(OWMAX + 2) * CB, in_plane = 3 * in_row;
-    const size_t w_kb = (size_t)Cb * 9 * CB * CB, o_kb = (size_t)OWMAX * CB;
-    float *in = alloc_aligned(Cb * in_plane), *w = alloc_aligned(KBMAX * w_kb);
-    float *b = alloc_aligned(KBMAX * CB), *o = alloc_aligned(KBMAX * o_kb), *ref = alloc_aligned(KBMAX * o_kb);
-    std::mt19937 rng(645);
-    std::uniform_real_distribution<float> u(-1.f, 1.f);
-    for (size_t i = 0; i < Cb * in_plane; i++) in[i] = u(rng);
-    for (size_t i = 0; i < KBMAX * w_kb; i++) w[i] = u(rng) * 0.1f;
-    for (int i = 0; i < KBMAX * CB; i++) b[i] = u(rng);
+    const bool sweep = Cs.size() > 1 || runs > 1;
+    const int trials = sweep ? 5 : 9;
 
     int pfd = perf_open_cycles();
     const char *src = pfd >= 0 ? "core" : "tsc";
     if (pfd < 0) fprintf(stderr, "warning: perf_event not available, using TSC ticks (base clock): %% of peak is inflated under turbo\n");
 
     FILE *f = csv ? fopen(csv, "w") : nullptr;
-    if (f) fprintf(f, "tile,KB,OW,accumulators,registers,C,silu,weights_kb,cycle_src,flops_per_call,best_cycles_per_call,median_cycles_per_call,flops_per_cycle,pct_peak,max_rel_err,pass,note\n");
-    printf("microkernel alone: C = %d (reduction %d MACs per output), SiLU %s, peak %.0f FLOPs/cycle, %s cycles\n", C, C * 9, fs ? "on" : "off", peak, src);
-    printf("%-8s %4s %5s %8s %9s %11s %10s %7s %9s  %s\n", "tile", "acc", "regs", "weights", "FLOP/call", "cycles/call", "FLOPs/cyc", "%peak", "max_err", "");
+    if (f) fprintf(f, "run,tile,KB,OW,accumulators,registers,C,k,silu,weights_kb,working_set_kb,cycle_src,flops_per_call,best_cycles_per_call,median_cycles_per_call,flops_per_cycle,pct_peak,max_rel_err,pass,note\n");
+    printf("stride-1 microkernel alone: SiLU %s, peak %.0f FLOPs/cycle, %s cycles, %d run(s)\n", fs ? "on" : "off", peak, src, runs);
 
-    for (int t = 0; t < S1_NUKRS; t++) {
-        const s1_ukr_entry_t &k = S1_UKRS[t];
-        /* correctness on this data */
-        memset(o, 0, KBMAX * o_kb * sizeof(float));
-        k.fn(Cb, in, in_plane, in_row, w, w_kb, b, o, o_kb, fs);
-        s1_ukr_reference(k.KB, k.OW, Cb, in, in_plane, in_row, w, w_kb, b, ref, o_kb, fs);
-        double err = 0, mx = 0;
-        for (int kb = 0; kb < k.KB; kb++)
-            for (int i = 0; i < k.OW * CB; i++) {
-                const size_t ix = kb * o_kb + i;
-                err = std::max(err, (double)std::fabs(o[ix] - ref[ix]));
-                mx = std::max(mx, (double)std::fabs(ref[ix]));
+    int fails = 0;
+    for (int run = 1; run <= runs; run++) {
+        busy_warmup(warm);
+        if (sweep) { printf("  run %d/%d: C = %d ... %d\n", run, runs, Cs.front(), Cs.back()); fflush(stdout); }
+        for (int c : Cs) {
+            Data d = make_data(c);
+            if (!sweep) printf("C = %d (k = C*9 = %d)\n%-8s %4s %5s %8s %9s %11s %10s %7s %9s\n", c, c * 9, "tile", "acc", "regs",
+                               "weights", "FLOP/call", "cycles/call", "FLOPs/cyc", "%peak", "max_err");
+            for (int t = 0; t < S1_NUKRS; t++) {
+                const s1_ukr_entry_t &k = S1_UKRS[t];
+                if (!tiles.empty() && tiles.find(std::string(",") + k.name + ",") == std::string::npos) continue;
+                Result r = run_tile(k, d, fs, reps, trials, pfd, peak);
+                fails += !r.pass;
+                if (!sweep)
+                    printf("%-8s %4d %5d %6.1fKB %9.0f %11.1f %10.2f %6.1f%% %9.1e  %s%s\n", k.name, k.KB * k.OW, k.regs, r.wkb, r.flops,
+                           r.best, r.fpc, r.pct, r.rel, r.pass ? "" : "FAIL  ", k.note);
+                if (f)
+                    fprintf(f, "%d,%s,%d,%d,%d,%d,%d,%d,%d,%.1f,%.1f,%s,%.0f,%.2f,%.2f,%.3f,%.2f,%.2e,%d,%s\n", run, k.name, k.KB, k.OW,
+                            k.KB * k.OW, k.regs, c, c * 9, fs, r.wkb, r.wskb, src, r.flops, r.best, r.med, r.fpc, r.pct, r.rel,
+                            r.pass ? 1 : 0, k.note);
             }
-        const double rel = err / std::max(mx, 1e-30);
-
-        const double flops = 2.0 * k.KB * CB * k.OW * (double)C * 9;
-        const long n = reps > 0 ? reps : std::max(2000L, (long)(4e8 / flops)); /* ~0.1 s per trial */
-        for (long i = 0; i < n / 4; i++) k.fn(Cb, in, in_plane, in_row, w, w_kb, b, o, o_kb, fs); /* warm-up */
-        std::vector<double> cyc;
-        for (int trial = 0; trial < 9; trial++) {
-            uint64_t c0 = pfd >= 0 ? perf_read(pfd) : rdtsc();
-            for (long i = 0; i < n; i++) k.fn(Cb, in, in_plane, in_row, w, w_kb, b, o, o_kb, fs);
-            uint64_t c1 = pfd >= 0 ? perf_read(pfd) : rdtsc();
-            cyc.push_back((double)(c1 - c0) / n);
+            free_data(d);
         }
-        std::sort(cyc.begin(), cyc.end());
-        const double best = cyc[0], med = cyc[cyc.size() / 2];
-        const double fpc = best > 0 ? flops / best : 0, pct = 100 * fpc / peak;
-        const double wkb = k.KB * (double)C * 288 / 1024; /* KB output blocks x C x 9 x 8 floats */
-        const bool pass = rel <= 1e-4;
-        printf("%-8s %4d %5d %6.1fKB %9.0f %11.1f %10.2f %6.1f%% %9.1e  %s%s\n", k.name, k.KB * k.OW, k.regs, wkb, flops, best,
-               fpc, pct, rel, pass ? "" : "FAIL  ", k.note);
-        if (f)
-            fprintf(f, "%s,%d,%d,%d,%d,%d,%d,%.1f,%s,%.0f,%.2f,%.2f,%.3f,%.2f,%.2e,%d,%s\n", k.name, k.KB, k.OW, k.KB * k.OW, k.regs, C, fs,
-                    wkb, src, flops, best, med, fpc, pct, rel, pass ? 1 : 0, k.note);
     }
-    printf("weights column: L1D = 32 KB, L2 = 256 KB. Above 32 KB the weights stream from L2 every call.\n");
+    printf("%s; weights: L1D = 32 KB, L2 = 256 KB\n", fails ? "SOME TILES FAILED" : "all tiles PASS (max rel err <= 1e-4)");
     if (f) fclose(f);
-    return 0;
+    return fails ? 1 : 0;
 }

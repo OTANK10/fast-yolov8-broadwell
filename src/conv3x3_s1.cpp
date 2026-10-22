@@ -929,11 +929,13 @@ void conv3x3_s1_v8a(const conv_desc_t *d, const float *in, const float *wp, cons
 void conv3x3_s1_v8b(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     conv3x3_s1_bs43<true, true>(d, in, wp, bias, out, false); /* v8a, row remainders done by 2x5 tiles */
 }
-/* v9: pick the microkernel per layer. v8b's 4-block tile streams 4*C*9*256 B
- * of weights per call; at C >= 128 that is >= 1.1 MB, over 4x the 256 KB L2,
- * and the weights come from L3 (measured: v8a 54-67% vs v2 69-79% there).
- * Below that, v8b's lower loads-per-FMA wins. Until we cache-block the input
- * channels (phase 2), the deep layers use v2's 2-block tile. */
+/* v9: pick the microkernel per layer. One output block's weights are
+ * C*9*8 floats = 288*C bytes, so v8b's 4-block tile streams 1152*C bytes per
+ * call: 144 KB at C = 128 and 288 KB at C = 256, against a 256 KB L2 that also
+ * holds the input rows. Those weights come from L2 or beyond, and the 4x3 tile
+ * reads 4 weight vectors per 12 FMAs (v2: 2 per 10, 1.67x less). Measured:
+ * v8a 54-67% vs v2 69-79% at C >= 128; below that v8b's fewer loads per FMA
+ * win. Until we cache-block the input channels (phase 2), deep layers use v2. */
 void conv3x3_s1_v9(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     if (d->C >= 128) conv3x3_s1_tiled<2, 5>(d, in, wp, bias, out, false);
     else conv3x3_s1_bs43<true, true>(d, in, wp, bias, out, false);

@@ -88,6 +88,28 @@ int main() {
     CHECK(close(sppf[4], 5.0f));
     for (std::size_t i = 9; i < sppf.size(); ++i) CHECK(close(sppf[i], 9.0f));
 
+    // ---- every isolated stride-1 microkernel vs the scalar one-tile reference ----
+    for (int t = 0; t < S1_NUKRS; t++)
+        for (int C : {16, 64}) {
+            const s1_ukr_entry_t &u = S1_UKRS[t];
+            const int Cb = C / 8; const size_t in_row = 12 * 8, in_plane = 3 * in_row, w_kb = (size_t)Cb * 9 * 64, o_kb = 80;
+            std::vector<float> in(Cb * in_plane + 64), w(4 * w_kb + 64), b(32), o(4 * o_kb + 64), r(4 * o_kb + 64);
+            std::mt19937 g(C + t);
+            std::uniform_real_distribution<float> d(-1.f, 1.f);
+            float *pi = alloc_aligned(in.size()), *pw = alloc_aligned(w.size()), *po = alloc_aligned(o.size());
+            for (size_t i = 0; i < in.size(); i++) pi[i] = d(g);
+            for (size_t i = 0; i < w.size(); i++) pw[i] = 0.1f * d(g);
+            for (auto &x : b) x = d(g);
+            u.fn(Cb, pi, in_plane, in_row, pw, w_kb, b.data(), po, o_kb, 1);
+            s1_ukr_reference(u.KB, u.OW, Cb, pi, in_plane, in_row, pw, w_kb, b.data(), r.data(), o_kb, 1);
+            double e = 0, m = 0;
+            for (int k = 0; k < u.KB; k++)
+                for (int i = 0; i < u.OW * 8; i++) { e = std::fmax(e, std::fabs(po[k * o_kb + i] - r[k * o_kb + i])); m = std::fmax(m, std::fabs(r[k * o_kb + i])); }
+            std::printf("  ukr %-7s C=%-3d max_rel_err=%.1e %s\n", u.name, C, e / m, e / m <= 1e-4 ? "ok" : "FAIL");
+            CHECK(e / m <= 1e-4);
+            free(pi); free(pw); free(po);
+        }
+
     // ---- every kernel vs the reference on yolov8n channel counts (small spatial size) ----
     std::mt19937 rng(645);
     double worst = 0;

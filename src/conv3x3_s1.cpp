@@ -991,6 +991,48 @@ void conv3x3_s1_v5(const conv_desc_t *d, const float *in, const float *wp, const
 S1_TILE(1, 1) S1_TILE(1, 2) S1_TILE(1, 4) S1_TILE(1, 5) S1_TILE(1, 10)
 S1_TILE(2, 1) S1_TILE(2, 2) S1_TILE(2, 4) S1_TILE(2, 5)
 
+
+/* ------------------------------------------- isolated microkernels ---- */
+/*
+ * Every register tile as a plain function with ONE signature, so
+ * benchmarks/bench_ukr.cpp can time the microkernel alone: one call = one
+ * full KB x OW output tile (bias, C*9 reduction, SiLU, store), no layer
+ * loops, no row tails, no layout traversal. in_row = floats between input
+ * rows (Wp * 8); ukr<> wants Wp, so the wrapper converts.
+ */
+template <int KB, int OW>
+static void ukr_entry(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+                      const float *b, float *o, size_t o_kb, int fs) {
+    ukr<KB, OW>(Cb, ip, in_plane, (int)(in_row / CB), w, w_kb, b, o, o_kb, fs);
+}
+template <int KB, int OW>
+static void ukr_bs_entry(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+                         const float *b, float *o, size_t o_kb, int fs) {
+    ukr_bs<KB, OW>(Cb, ip, in_plane, in_row, w, w_kb, b, o, o_kb, fs);
+}
+static void ukr_2x5_asm_entry(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+                              const float *b, float *o, size_t o_kb, int fs) {
+    ukr_2x5_asm(Cb, ip, in_plane, in_row, w, w_kb, b, o, o_kb, fs);
+}
+static void ukr_4x3_asm_entry(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+                              const float *b, float *o, size_t o_kb, int fs) {
+    ukr_4x3_asm(Cb, ip, in_plane, in_row, w, w_kb, b, o, o_kb, fs);
+}
+/* regs = accumulators + weight registers + broadcast registers */
+const s1_ukr_entry_t S1_UKRS[] = {
+    {"1x1", 1, 1, 3, "v1's tile", ukr_entry<1, 1>},
+    {"1x5", 1, 5, 7, "sweep", ukr_entry<1, 5>},
+    {"1x10", 1, 10, 12, "sweep", ukr_entry<1, 10>},
+    {"2x2", 2, 2, 7, "sweep", ukr_entry<2, 2>},
+    {"2x4", 2, 4, 11, "sweep", ukr_entry<2, 4>},
+    {"2x5", 2, 5, 13, "v2's tile (intrinsics)", ukr_entry<2, 5>},
+    {"2x6", 2, 6, 15, "v4/v5's tile (intrinsics)", ukr_entry<2, 6>},
+    {"2x5asm", 2, 5, 13, "v2a's tile (inline asm)", ukr_2x5_asm_entry},
+    {"4x3", 4, 3, 16, "v8's tile (intrinsics)", ukr_bs_entry<4, 3>},
+    {"4x3asm", 4, 3, 16, "v8a/v8b's tile (inline asm)", ukr_4x3_asm_entry},
+};
+const int S1_NUKRS = (int)(sizeof(S1_UKRS) / sizeof(S1_UKRS[0]));
+
 #endif /* AVX2 */
 
 /* ------------------------------------------------------ weight packing ---- */
@@ -1014,6 +1056,29 @@ void pack_weights_s1_kb2(const float *w, int K, int C, int R, int S, float *dst)
                     dst[o] = w[(((size_t)k * C + c) * R + r) * S + s];
                 }
 }
+
+/* Scalar reference for ONE microkernel call (same arguments), used by
+ * bench_ukr and the tests to check every tile. */
+void s1_ukr_reference(int KB, int OW, int Cb, const float *ip, size_t in_plane, size_t in_row,
+                      const float *w, size_t w_kb, const float *b, float *o, size_t o_kb, int fs) {
+    for (int k = 0; k < KB; k++)
+        for (int j = 0; j < OW; j++)
+            for (int ko = 0; ko < CB; ko++) {
+                float acc = b[k * CB + ko];
+                for (int cb = 0; cb < Cb; cb++)
+                    for (int r = 0; r < 3; r++)
+                        for (int s = 0; s < 3; s++)
+                            for (int ci = 0; ci < CB; ci++)
+                                acc += ip[cb * in_plane + r * in_row + (size_t)(j + s) * CB + ci] *
+                                       w[k * w_kb + (size_t)cb * 9 * CB * CB + (r * 3 + s) * CB * CB + ci * CB + ko];
+                o[k * o_kb + (size_t)j * CB + ko] = fs ? silu_scalar(acc) : acc;
+            }
+}
+
+#ifndef FASTYOLO_HAVE_AVX2
+const s1_ukr_entry_t S1_UKRS[] = {{"none", 0, 0, 0, "no AVX2 build", nullptr}};
+const int S1_NUKRS = 0;
+#endif
 
 #ifndef FASTYOLO_HAVE_AVX2 /* no AVX2 (e.g. a Mac): every version falls back to v0 so the build and tests still work */
 #define S1_FALLBACK(name) \

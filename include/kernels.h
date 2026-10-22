@@ -43,6 +43,14 @@ FASTYOLO_CONV_DECL(conv3x3_s1_v9mt) // v9 + OpenMP
 // Weight packer for v5: [Kb/2][Cb][3][3][8 ic][2][8 oc]. Same size as pack_weights.
 void pack_weights_s1_kb2(const float *oihw, int K, int C, int R, int S, float *dst);
 typedef void (*pack_fn_t)(const float *oihw, int K, int C, int R, int S, float *dst);
+// Isolated stride-1 microkernels (benchmarks/bench_ukr.cpp): one call = one KB x OW output tile.
+typedef void (*s1_ukr_fn_t)(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w,
+                            size_t w_kb, const float *b, float *o, size_t o_kb, int fuse_silu);
+typedef struct { const char *name; int KB, OW, regs; const char *note; s1_ukr_fn_t fn; } s1_ukr_entry_t;
+extern const s1_ukr_entry_t S1_UKRS[];
+extern const int S1_NUKRS;
+void s1_ukr_reference(int KB, int OW, int Cb, const float *ip, size_t in_plane, size_t in_row,
+                      const float *w, size_t w_kb, const float *b, float *o, size_t o_kb, int fuse_silu);
 // tile-shape sweep (single core): KB output-channel blocks x OW pixels
 FASTYOLO_CONV_DECL(conv3x3_s1_t1x1) FASTYOLO_CONV_DECL(conv3x3_s1_t1x2) FASTYOLO_CONV_DECL(conv3x3_s1_t1x4)
 FASTYOLO_CONV_DECL(conv3x3_s1_t1x5) FASTYOLO_CONV_DECL(conv3x3_s1_t1x10)

@@ -16,6 +16,8 @@
  *   ./build/bench_ukr --sweep 8 512 8 --runs 3 --tiles 2x5,2x6 --csv results/ukr_sweep.csv
  *        k = 72 ... 4608, like the assignment's k = 32 ... 512 sweep
  *   options: --no-silu  --reps N  --warmup SECONDS (default 2)
+ *   --crosscheck: also time with rdtsc and wall clock; prints the core's real GHz and
+ *        % of peak from wall time at max turbo (a floor that needs no perf counter)
  *
  * Cycles are real core cycles from perf_event (not TSC x 3.4/2.4 like the
  * assignment driver), so % of peak is exact under turbo. Pin with taskset.
@@ -28,6 +30,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <random>
 #include <string>
 #include <vector>
@@ -96,7 +99,8 @@ static Data make_data(int C) {
 }
 static void free_data(Data &d) { free(d.in); free(d.w); free(d.b); free(d.o); free(d.ref); }
 
-struct Result { double flops, best, med, fpc, pct, rel, wkb, wskb; bool pass; };
+struct Result { double flops, best, med, fpc, pct, rel, wkb, wskb, ghz_core, ghz_tsc, gflops_wall; bool pass; };
+static double now_ns() { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e9 + t.tv_nsec; }
 
 static Result run_tile(const s1_ukr_entry_t &k, Data &d, int fs, long reps, int trials, int pfd, double peak) {
     Result r{};
@@ -115,15 +119,27 @@ static Result run_tile(const s1_ukr_entry_t &k, Data &d, int fs, long reps, int 
     r.flops = 2.0 * k.KB * CB * k.OW * (double)d.C * 9;
     const long n = reps > 0 ? reps : std::max(1000L, (long)(1.5e8 / r.flops)); /* ~25-50 ms per trial */
     for (long i = 0; i < n / 4; i++) k.fn(d.Cb, d.in, d.in_plane, d.in_row, d.w, d.w_kb, d.b, d.o, d.o_kb, fs);
+    /* Three clocks around the same loop: core cycles (perf), TSC ticks
+     * (fixed base clock) and wall time. Their ratios are the cross-check. */
     std::vector<double> cyc;
+    double best_ns = 0, best_ticks = 0, best_cyc = 1e300;
     for (int t = 0; t < trials; t++) {
-        uint64_t c0 = pfd >= 0 ? perf_read(pfd) : rdtsc();
+        const double w0 = now_ns();
+        const uint64_t t0 = rdtsc();
+        uint64_t c0 = pfd >= 0 ? perf_read(pfd) : t0;
         for (long i = 0; i < n; i++) k.fn(d.Cb, d.in, d.in_plane, d.in_row, d.w, d.w_kb, d.b, d.o, d.o_kb, fs);
-        uint64_t c1 = pfd >= 0 ? perf_read(pfd) : rdtsc();
-        cyc.push_back((double)(c1 - c0) / n);
+        const uint64_t t1 = rdtsc();
+        uint64_t c1 = pfd >= 0 ? perf_read(pfd) : t1;
+        const double w1 = now_ns();
+        const double cpc = (double)(c1 - c0) / n;
+        cyc.push_back(cpc);
+        if (cpc < best_cyc) { best_cyc = cpc; best_ns = (w1 - w0) / n; best_ticks = (double)(t1 - t0) / n; }
     }
     std::sort(cyc.begin(), cyc.end());
     r.best = cyc[0]; r.med = cyc[cyc.size() / 2];
+    r.ghz_core = r.best / best_ns;                 /* core cycles per ns = the clock the core really ran at */
+    r.ghz_tsc = best_ticks / best_ns;              /* should be the TSC's fixed rate (2.40 on ece028) */
+    r.gflops_wall = r.flops / best_ns;             /* FLOPs per ns = GFLOP/s, from wall time alone */
     r.fpc = r.best > 0 ? r.flops / r.best : 0;
     r.pct = 100 * r.fpc / peak;
     r.wkb = k.KB * (double)d.C * 288 / 1024;                                  /* weights read per call */
@@ -135,10 +151,13 @@ int main(int argc, char **argv) {
     int C = 32, fs = 1, runs = 1, c0 = 0, c1 = 0, cstep = 8;
     long reps = 0;
     double warm = 2.0;
+    int cross = 0;
+    const double max_ghz = getenv("MAX_GHZ") ? atof(getenv("MAX_GHZ")) : 3.4; /* E5-2640 v4 max turbo */
     const char *csv = nullptr;
     std::string tiles;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--no-silu")) fs = 0;
+        else if (!strcmp(argv[i], "--crosscheck")) cross = 1;
         else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = atol(argv[++i]);
         else if (!strcmp(argv[i], "--csv") && i + 1 < argc) csv = argv[++i];
         else if (!strcmp(argv[i], "--runs") && i + 1 < argc) runs = atoi(argv[++i]);
@@ -177,7 +196,15 @@ int main(int argc, char **argv) {
                 if (!tiles.empty() && tiles.find(std::string(",") + k.name + ",") == std::string::npos) continue;
                 Result r = run_tile(k, d, fs, reps, trials, pfd, peak);
                 fails += !r.pass;
-                if (!sweep)
+                if (cross) {
+                    /* % of peak three ways: from core cycles (what we report), from wall time if the core had run
+                     * at max turbo the whole time (a floor: the true clock cannot be higher), and at base clock. */
+                    const double pk_turbo = 100 * r.gflops_wall / (max_ghz * peak), pk_base = 100 * r.gflops_wall / (2.4 * peak);
+                    printf("%-8s core clock %.2f GHz | TSC %.2f GHz | %6.1f GFLOP/s wall | %%peak: %5.1f%% (core cycles)  >= %5.1f%% (wall @ %.1f GHz max turbo)  %5.1f%% (wall @ 2.4 GHz base)%s\n",
+                           k.name, r.ghz_core, r.ghz_tsc, r.gflops_wall, r.pct, pk_turbo, max_ghz, pk_base,
+                           (r.ghz_core > max_ghz * 1.02 || r.ghz_core < 1.0) ? "  <-- core clock implausible, cycle count suspect" : "");
+                }
+                if (!sweep && !cross)
                     printf("%-8s %4d %5d %6.1fKB %9.0f %11.1f %10.2f %6.1f%% %9.1e  %s%s\n", k.name, k.KB * k.OW, k.regs, r.wkb, r.flops,
                            r.best, r.fpc, r.pct, r.rel, r.pass ? "" : "FAIL  ", k.note);
                 if (f)

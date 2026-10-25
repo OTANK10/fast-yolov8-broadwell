@@ -16,12 +16,14 @@
  *   ./build/bench_ukr --sweep 8 512 8 --runs 3 --tiles 2x5,2x6 --csv results/ukr_sweep.csv
  *        k = 72 ... 4608, like the assignment's k = 32 ... 512 sweep
  *   options: --no-silu  --reps N  --warmup SECONDS (default 2)
- *   cycles: default = wall ns x 3.4 (= TSC x 3.4 / 2.4 on ece028, the Assignment 2 driver's convention: core assumed at
- *        max turbo, never overstates); --clock G changes 3.4; --core-cycles = real perf_event cycles
+ *   cycles: default = rdtsc ticks x (3.4 / 2.4). The TSC counts at the fixed 2.4 GHz base clock no matter
+ *        what the core does; scaling by turbo / base gives the cycles of a core running at its 3.4 GHz max
+ *        turbo the whole time (Assignment 2 convention, never overstates). --clock G sets the turbo (3.4),
+ *        --base G the TSC rate (2.4); --core-cycles = real perf_event cycles
  *   --crosscheck: also time with rdtsc and wall clock; prints the core's real GHz and
  *        % of peak from wall time at max turbo (a floor that needs no perf counter)
  *
- * Cycles default to the Assignment 2 convention (TSC x 3.4/2.4: the core assumed
+ * Cycles default to the Assignment 2 convention (TSC ticks x 3.4/2.4: the core assumed
  * at its 3.4 GHz max turbo); --core-cycles uses real perf cycles. Pin with taskset.
  * Every tile is checked against a scalar reference at every C first.
  */
@@ -104,7 +106,7 @@ static void free_data(Data &d) { free(d.in); free(d.w); free(d.b); free(d.o); fr
 struct Result { double flops, best, med, fpc, pct, rel, wkb, wskb, ghz_core, ghz_tsc, gflops_wall; bool pass; };
 static double now_ns() { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e9 + t.tv_nsec; }
 
-static Result run_tile(const s1_ukr_entry_t &k, Data &d, int fs, long reps, int trials, int pfd, double peak, bool real, double clock_ghz) {
+static Result run_tile(const s1_ukr_entry_t &k, Data &d, int fs, long reps, int trials, int pfd, double peak, bool real, double clock_ghz, double base_ghz) {
     Result r{};
     memset(d.o, 0, KBMAX * d.o_kb * sizeof(float));
     k.fn(d.Cb, d.in, d.in_plane, d.in_row, d.w, d.w_kb, d.b, d.o, d.o_kb, fs);
@@ -133,7 +135,8 @@ static Result run_tile(const s1_ukr_entry_t &k, Data &d, int fs, long reps, int 
         const uint64_t t1 = rdtsc();
         uint64_t c1 = pfd >= 0 ? perf_read(pfd) : t1;
         const double w1 = now_ns();
-        const double cpc = real ? (double)(c1 - c0) / n : (w1 - w0) * clock_ghz / n; /* wall ns x GHz */
+        /* default: TSC ticks (fixed base clock) scaled by turbo / base = cycles at max turbo */
+        const double cpc = real ? (double)(c1 - c0) / n : (double)(t1 - t0) / n * (clock_ghz / base_ghz);
         cyc.push_back(cpc);
         if (cpc < best_cyc) { best_cyc = cpc; best_ns = (w1 - w0) / n; best_ticks = (double)(t1 - t0) / n;
                               core_cyc_best = pfd >= 0 ? (double)(c1 - c0) / n : 0; }
@@ -155,7 +158,8 @@ int main(int argc, char **argv) {
     long reps = 0;
     double warm = 2.0;
     int cross = 0, use_perf = 0;
-    double clock_ghz = 3.4; /* Assignment 2 convention: cycles = TSC ticks x 3.4 / 2.4 */
+    double clock_ghz = 3.4; /* max turbo. Assignment 2 convention: cycles = TSC ticks x 3.4 / 2.4 */
+    double base_ghz = 2.4;  /* TSC rate = base clock of the E5-2640 v4 ("@ 2.40GHz") */
     const double max_ghz = getenv("MAX_GHZ") ? atof(getenv("MAX_GHZ")) : 3.4; /* E5-2640 v4 max turbo */
     const char *csv = nullptr;
     std::string tiles;
@@ -164,6 +168,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--crosscheck")) cross = 1;
         else if (!strcmp(argv[i], "--core-cycles")) use_perf = 1;
         else if (!strcmp(argv[i], "--clock") && i + 1 < argc) clock_ghz = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--base") && i + 1 < argc) base_ghz = atof(argv[++i]);
         else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = atol(argv[++i]);
         else if (!strcmp(argv[i], "--csv") && i + 1 < argc) csv = argv[++i];
         else if (!strcmp(argv[i], "--runs") && i + 1 < argc) runs = atoi(argv[++i]);
@@ -181,14 +186,14 @@ int main(int argc, char **argv) {
     const bool sweep = Cs.size() > 1 || runs > 1;
     const int trials = sweep ? 5 : 9;
 
-    /* Cycle source. Default (as the Assignment 2 driver): cycles = wall time x clock (= TSC x clock / 2.4 on ece028), i.e. the core is
+    /* Cycle source. Default (as the Assignment 2 driver): cycles = TSC ticks x clock / base, i.e. the core is
      * assumed to run at `clock` GHz (3.4 = max turbo) the whole time. That is the most a core can run, so it
      * never overstates FLOPs/cycle. --core-cycles counts the real cycles with perf_event instead. */
     int pfd = (use_perf || cross) ? perf_open_cycles() : -1;
-    if (use_perf && pfd < 0) fprintf(stderr, "warning: perf_event not available, falling back to TSC x %.2f / 2.4\n", clock_ghz);
+    if (use_perf && pfd < 0) fprintf(stderr, "warning: perf_event not available, falling back to TSC x %.2f / %.2f\n", clock_ghz, base_ghz);
     const bool real = use_perf && pfd >= 0;
     char srcbuf[32];
-    snprintf(srcbuf, sizeof srcbuf, "%s", real ? "core" : (std::string("wall@") + std::to_string(clock_ghz).substr(0, 3) + "GHz").c_str());
+    snprintf(srcbuf, sizeof srcbuf, "%s", real ? "core" : (std::string("tsc*") + std::to_string(clock_ghz).substr(0, 3) + "/" + std::to_string(base_ghz).substr(0, 3)).c_str());
     const char *src = srcbuf;
 
     FILE *f = csv ? fopen(csv, "w") : nullptr;
@@ -206,8 +211,14 @@ int main(int argc, char **argv) {
             for (int t = 0; t < S1_NUKRS; t++) {
                 const s1_ukr_entry_t &k = S1_UKRS[t];
                 if (!tiles.empty() && tiles.find(std::string(",") + k.name + ",") == std::string::npos) continue;
-                Result r = run_tile(k, d, fs, reps, trials, pfd, peak, real, clock_ghz);
+                Result r = run_tile(k, d, fs, reps, trials, pfd, peak, real, clock_ghz, base_ghz);
                 fails += !r.pass;
+                static bool warned = false;
+                if (!real && !warned && std::fabs(r.ghz_tsc / base_ghz - 1) > 0.02) {
+                    fprintf(stderr, "warning: TSC runs at %.2f GHz here, not --base %.2f: pass --base %.2f (on ece028 it is 2.40)\n",
+                            r.ghz_tsc, base_ghz, r.ghz_tsc);
+                    warned = true;
+                }
                 if (cross) {
                     /* % of peak three ways: from core cycles (what we report), from wall time if the core had run
                      * at max turbo the whole time (a floor: the true clock cannot be higher), and at base clock. */

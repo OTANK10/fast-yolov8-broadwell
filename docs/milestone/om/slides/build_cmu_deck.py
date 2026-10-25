@@ -244,11 +244,11 @@ text(s, 4.35, 4.03, 5.15, 0.55, "Weights packed [K/8][C/8][3][3][8 ic][8 oc]; ac
 
 # ------------------------------------------------------------------ 3b. assumptions
 s = content_slide("How the numbers are measured",
-    "These are the assumptions behind every number in the talk. The important one: cycles are wall time times 3.4 GHz, the CPU's maximum turbo, "
+    "These are the assumptions behind every number in the talk. The important one: we count rdtsc ticks, which run at the fixed 2.4 GHz base clock, and scale them by 3.4 over 2.4, the ratio of max turbo to base, "
     "exactly the Assignment 2 convention. The core can never run faster than that, so the percentages can only understate.")
 assume = [("Machine and code", "ece028, Xeon E5-2640 v4, 1 core (taskset); C++ with AVX2 intrinsics only, GCC 8.5 -O3"),
           ("Peak", "2 FMA units × 8 FP32 lanes × 2 FLOPs = 32 FLOPs/cycle per core (AVX2, no AVX-512)"),
-          ("Cycles", "wall time × 3.4 GHz (max turbo), as in Assignment 2: can only understate % of peak"),
+          ("Cycles", "rdtsc ticks (fixed 2.4 GHz base) × 3.4 / 2.4 = cycles at max turbo, as in A2: can only understate"),
           ("FLOPs", "2 × outputs × C × 9: only the convolution's multiply-adds; bias and SiLU count as zero"),
           ("Microkernel alone", "one tile of data reused (stays in L1/L2), 2 s warm-up, best of 3 runs, SiLU off"),
           ("Full layers", "all 32 real YOLOv8n layers, batch 1, 640 × 640 image, FP32, SiLU on"),

@@ -24,6 +24,7 @@ ap.add_argument("-o", "--out", default="results/ukr_design_space.png")
 ap.add_argument("--silu-on", action="store_true", help="isolated points with the fused SiLU (older sweeps) instead of results/ukr_C64_nosilu.csv")
 a = ap.parse_args()
 R = "results"
+CLOCK = 3.4  # GHz: every % of peak assumes the core ran at max turbo (Assignment 2 convention)
 
 
 def layer_pct(name):
@@ -31,7 +32,10 @@ def layer_pct(name):
     if not os.path.exists(p):
         return None
     rows = [r for r in csv.DictReader(open(p)) if r["stride"] == "1" and r["R"] == "3"]
-    return 100 * sum(float(r["flops"]) for r in rows) / sum(float(r["best_cycles"]) for r in rows) / 32
+    fl = sum(float(r["flops"]) for r in rows)
+    if "time_us" in rows[0]:  # Assignment 2 convention: cycles = time x 3.4 GHz (max turbo)
+        return 100 * fl / (sum(float(r["time_us"]) for r in rows) * 1e-6 * CLOCK * 1e9) / 32
+    return 100 * fl / sum(float(r["best_cycles"]) for r in rows) / 32
 
 
 def iso_pct(path, tile, C=64):
@@ -53,7 +57,7 @@ acc = {"1x1": 1, "1x2": 2, "2x1": 2, "1x4": 4, "2x2": 4, "1x5": 5, "2x4": 8, "1x
 X = {t: i for i, t in enumerate(tiles)}
 
 # (tile, label, impl, in-layer %, isolated %)
-C64 = f"{R}/ukr_C64_nosilu.csv"
+C64 = f"{R}/ukr_C64_nosilu_34.csv" if os.path.exists(f"{R}/ukr_C64_nosilu_34.csv") else f"{R}/ukr_C64_nosilu.csv"
 OFF = not a.silu_on and os.path.exists(C64)
 if OFF:
     iso = lambda tile: iso_pct(C64, tile)
@@ -135,7 +139,7 @@ leg = [Line2D([], [], marker="o", ls="", color="#444", label="microkernel alone 
 axr.legend(handles=leg, fontsize=8, loc="lower right", frameon=True)
 fig.suptitle(f"Stride-1 kernel design space on ece028: hand-allocated tiles reach {best_alone:.0f}% alone and {best_layer:.0f}% in all 32 layers",
              fontsize=12.5, x=0.01, ha="left")
-fig.text(0.01, 0.005, "1 core, perf_event core cycles, GCC 8.5 -O3 -march=broadwell, FP32. Sources: results/s1_*_b1_t1.csv, s1_tile_sweep.csv, " + ("ukr_C64_nosilu.csv." if OFF else "ukr_sweep*.csv; v2a alone = one ece028 run.") + "",
+fig.text(0.01, 0.005, "1 core, cycles = time × 3.4 GHz (max turbo, as in Assignment 2), GCC 8.5 -O3 -march=broadwell, FP32. Sources: results/s1_*_b1_t1.csv, s1_tile_sweep.csv, " + ("ukr_C64_nosilu.csv." if OFF else "ukr_sweep*.csv; v2a alone = one ece028 run.") + "",
          fontsize=7.5, color="#666")
 fig.tight_layout(rect=(0, 0.02, 1, 0.96))
 fig.savefig(a.out, dpi=170)

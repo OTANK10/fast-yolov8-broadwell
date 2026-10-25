@@ -155,9 +155,37 @@ s = content_slide("One kernel call = 80 outputs",
     "Each cell is 8 channels of one pixel, exactly one YMM register, so the strip is 10 accumulators. "
     "It reads a 3 by 7 window of the input across all C channels and 16 filters of 3 by 3 by C. "
     "Each step multiplies 2 weight vectors by 5 broadcast inputs, 10 FMAs, repeated k = C x 9 times, then bias, SiLU, store.")
-s.shapes.add_picture(fig("docs/milestone/om/figs/tile_tensors.png"), Inches(0.5), Inches(1.15), width=Inches(9.0))
-text(s, 0.5, 3.95, 7.8, 0.6, "Per step (one input channel at one of the 9 taps): load 2 weight vectors, broadcast 5 inputs, 10 FMAs. "
-     "Repeat k = C × 9 times, then bias, SiLU and one store per register.", size=13)
+s.shapes.add_picture(fig("docs/milestone/om/figs/tile_tensors.png"), Inches(1.2), Inches(1.05), width=Inches(7.6))
+text(s, 0.5, 3.3, 9.0, 0.3, "Per step: 2 weight loads + 5 broadcasts feed 10 FMAs; repeated k = C × 9 times, then bias, SiLU, one store.",
+     size=11.5)
+strip = [("SIMD", "one vfmadd231ps = 8 multiply-adds (8 output channels): 32 FLOPs/cycle vs 4 scalar"),
+         ("Intrinsics", "C calls that are one instruction each, e.g. _mm256_fmadd_ps = vfmadd231ps"),
+         ("Reuse", "each weight vector used 5×, each broadcast 2×, each accumulator stored once"),
+         ("Layout", "8 channels of a pixel are contiguous: one aligned load fills one register")]
+for i, (h, b) in enumerate(strip):
+    x = 0.5 + i * 2.28
+    card(s, x, 3.68, 2.15, 0.92, PINK if i == 0 else SOFT, f"strip-{i}")
+    text(s, x + 0.1, 3.74, 1.95, 0.25, h, size=11.5, bold=True, color=RED if i == 0 else INK)
+    text(s, x + 0.1, 3.99, 1.95, 0.6, b, size=9.5, color=MUTED)
+
+# ------------------------------------------------------------------ 3b. assumptions
+s = content_slide("How the numbers are measured",
+    "These are the assumptions behind every number in the talk. The important one: cycles are wall time times 3.4 GHz, the CPU's maximum turbo, "
+    "exactly the Assignment 2 convention. The core can never run faster than that, so the percentages can only understate.")
+assume = [("Machine", "ece028, Xeon E5-2640 v4 (Broadwell), 1 core pinned with taskset, GCC 8.5 -O3 -march=broadwell"),
+          ("Peak", "2 FMA units × 8 FP32 lanes × 2 FLOPs = 32 FLOPs/cycle per core (AVX2, no AVX-512)"),
+          ("Cycles", "wall time × 3.4 GHz (max turbo), as in Assignment 2: can only understate % of peak"),
+          ("FLOPs", "2 × outputs × C × 9: only the convolution's multiply-adds; bias and SiLU count as zero"),
+          ("Microkernel alone", "one tile of data reused (stays in L1/L2), 2 s warm-up, best of 3 runs, SiLU off"),
+          ("Full layers", "all 32 real YOLOv8n layers, batch 1, 640 × 640 image, FP32, SiLU on"),
+          ("Correct", "every result checked: max relative error ≤ 1e-4 vs a scalar reference / OpenCV's real outputs"),
+          ("Baseline", "OpenCV DNN on the same ONNX model, 1 thread, its own per-layer timer")]
+for i, (h, b) in enumerate(assume):
+    col, row = i % 2, i // 2
+    x, y = 0.5 + col * 4.55, 1.1 + row * 0.88
+    card(s, x, y, 4.4, 0.78, SOFT, f"assume-{i}")
+    text(s, x + 0.12, y + 0.07, 4.1, 0.25, h, size=11.5, bold=True, color=RED if h == "Cycles" else INK)
+    text(s, x + 0.12, y + 0.33, 4.15, 0.45, b, size=9.5, color=MUTED)
 
 # ------------------------------------------------------------------ 4. four steps
 s = content_slide("Four steps: ops → accumulators → tile → benchmark",
@@ -193,12 +221,12 @@ s = content_slide("Same math, 50% to 95%: tile and register allocation",
     "Unrolling and software pipelining made it worse: full unrolling overflowed the uop cache and partial unrolling made GCC spill.")
 s.shapes.add_picture(fig("results/ukr_design_space.png"), Inches(0.5), Inches(1.1), height=Inches(3.5))
 for i, (h, b) in enumerate([("Intrinsics", "GCC: clean at 13 regs, copies at 15, spills at 16"),
-                            ("Inline asm", "2×6 by hand: 95% alone, 84% in layers"),
+                            ("Inline asm", "hand-written CPU instructions, we pick every register: 2×6 at 95% alone, 84% in layers"),
                             ("Unroll, pipeline", "lost: uop cache, spills")]):
     y = 1.1 + i * 1.18
     card(s, 7.05, y, 2.45, 1.05, PINK if i == 1 else SOFT, f"ds-card-{i}")
     text(s, 7.17, y + 0.08, 2.2, 0.28, h, size=12, bold=True, color=RED if i == 1 else INK)
-    text(s, 7.17, y + 0.4, 2.2, 0.6, b, size=11, color=MUTED)
+    text(s, 7.17, y + 0.38, 2.2, 0.65, b, size=10, color=MUTED)
 
 # ------------------------------------------------------------------ 6. sweep
 s = content_slide("Benchmarked like Assignment 2: FLOPs/cycle vs k",
@@ -213,26 +241,44 @@ stat(s, 6.75, 1.05, 2.75, "94–97%", "2×6 asm: 30–31 FLOPs/cycle, ~102 GFLOP
 stat(s, 6.75, 2.2, 2.75, "83–89%", "2×5 intrinsics (v2's tile)", GREY)
 stat(s, 6.75, 3.35, 2.75, "k ≈ 500", "L1 dip: 2×5 weights pass 32 KB, like k ≈ 315 in A2", AMBER)
 
-# ------------------------------------------------------------------ 7. alone vs layer + baselines
-s = content_slide("Alone vs in a layer: keep the kernel a function",
-    "Kernel A, 2x5 in asm, beat kernel B, 2x5 intrinsics, by 7 points alone but lost by 4 in the layers. "
-    "The assembly shows why: inlined into the layer loop, GCC keeps 3 accumulators on the stack and reloads them around every tap. "
-    "Calling the microkernel as a function, exactly as the benchmark does, fixes it: 83.1% for 2x5 and 83.7% for v10, all at 3.4 GHz. "
-    "v10 is 1.36 times faster than OpenCV and within 2% of ONNX Runtime on all 32 layers. Next: cache blocking and threading.")
-text(s, 0.5, 1.1, 4.6, 0.55, "v2a (2×5 asm): 92.2% alone, 72.5% when GCC inlines it into the layer loop", size=13, bold=True)
-card(s, 0.5, 1.75, 4.6, 0.95, SOFT, "spill-code")
-text(s, 0.62, 1.82, 4.4, 0.82, ["vmovaps 168(%rsp), %ymm1   # reload acc", "  ...asm block: 80 FMAs...", "vmovaps %ymm1, 168(%rsp)   # store acc"],
-     size=10.5, font="Courier New", anchor=MSO_ANCHOR.MIDDLE)
-text(s, 0.5, 2.82, 4.6, 0.85, "Inlined, GCC keeps 3 of 10 accumulators on the stack around every tap. Called as a function, as in the benchmark: 83.1% (v2b); with the 2×6 tile, 83.7% (v10).",
-     size=11.5, color=MUTED)
-text(s, 0.5, 3.8, 4.6, 0.75, "Next: cache blocking for C ≥ 128 (the 4×3 drop-off), NUMA-aware threads (v10 on 20 cores: 4.74 ms).", size=11.5, italic=True, color=RED)
+# ------------------------------------------------------------------ 7. alone vs in a layer
+s = content_slide("Fastest alone is not fastest in the layer",
+    "The 2x5 kernel written in assembly was the fastest alone, 92 percent, but inside the real layers it dropped to 72.5 percent, below the plain intrinsics version. "
+    "The reason is in the code box: the compiler pastes the kernel into the layer loop, runs out of registers, and parks 3 of the 10 running sums in memory. "
+    "It loads them back before every step and stores them after, which adds about 5 cycles to those chains: the latency problem again. "
+    "The fix: call the kernel as a separate function, exactly as the benchmark does. Then all 10 sums stay in registers: 83 percent, and 84 percent with the 2x6 tile.")
 cd = CategoryChartData()
-cd.categories = ["ONNX Runtime", "v10 (2×6 asm)", "v2 (intrinsics)", "OpenCV DNN"]
-cd.add_series("ms", (62.6, 63.8, 69.5, 86.4))
-ch = s.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(5.3), Inches(1.05), Inches(4.2), Inches(3.55), cd).chart
+cd.categories = ["alone (benchmark)", "in layers, inlined", "in layers, called as a function"]
+cd.add_series("% of peak", (92.2, 72.5, 83.1))
+ch = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(0.5), Inches(1.1), Inches(4.4), Inches(3.5), cd).chart
+style_chart(ch, '0.0"%"', TEAL)
+ch.value_axis.maximum_scale, ch.value_axis.minimum_scale, ch.value_axis.major_unit = 100, 0, 25
+ch.value_axis.tick_labels.number_format, ch.value_axis.tick_labels.number_format_is_linked = '0"%"', False
+chart_title(ch, "Same 2×5 asm kernel, % of peak")
+text(s, 5.2, 1.1, 4.3, 0.3, "What the compiler did when inlined:", size=12, bold=True)
+card(s, 5.2, 1.45, 4.3, 0.95, SOFT, "spill-code")
+text(s, 5.32, 1.52, 4.1, 0.82, ["vmovaps 168(%rsp), %ymm1   # load sum back", "  ...kernel: 80 FMAs...", "vmovaps %ymm1, 168(%rsp)   # park sum again"],
+     size=10.5, font="Courier New", anchor=MSO_ANCHOR.MIDDLE)
+text(s, 5.2, 2.55, 4.3, 1.0, [[("Problem: ", {"bold": True, "color": INK}), ("3 of the 10 sums live in memory, so each step waits on a store and a load.", {})],
+                             [("Fix: ", {"bold": True, "color": INK}), ("call the kernel as a function, as the benchmark does; all 10 stay in registers.", {})]],
+     size=11.5, color=MUTED)
+text(s, 5.2, 3.75, 4.3, 0.8, "The kernel is only fast if its registers stay its own.", size=14, bold=True, italic=True, color=RED)
+
+# ------------------------------------------------------------------ 8. against OpenCV
+s = content_slide("1.36× faster than OpenCV on all 32 layers",
+    "Total time for all 32 stride-1 layers, one core, same model and image. OpenCV DNN takes 86.4 milliseconds. "
+    "Our first kernel, v2 with intrinsics, takes 69.5: 1.24 times faster. Our best, v10 with the 2x6 tile in assembly called as a function, takes 63.8: 1.36 times faster, at 84 percent of peak. "
+    "Next: cache blocking for the layers with 128 or more input channels, and threading across 20 cores.")
+cd = CategoryChartData()
+cd.categories = ["v10 (2×6 asm)", "v2 (intrinsics)", "OpenCV DNN"]
+cd.add_series("ms", (63.8, 69.5, 86.4))
+ch = s.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(0.5), Inches(1.1), Inches(5.6), Inches(3.4), cd).chart
 style_chart(ch, '0.0" ms"', GREY)
-ch.value_axis.maximum_scale, ch.value_axis.minimum_scale, ch.value_axis.major_unit = 110, 0, 25
-chart_title(ch, "32 layers, 1 thread, ms (lower is better)")
+ch.value_axis.maximum_scale, ch.value_axis.minimum_scale, ch.value_axis.major_unit = 100, 0, 25
+chart_title(ch, "All 32 layers, 1 core, SiLU on: ms (lower is better)")
+stat(s, 6.5, 1.1, 3.0, "1.36×", "v10 vs OpenCV DNN (84% of peak vs 62%)", RED)
+stat(s, 6.5, 2.25, 3.0, "1.24×", "v2, the first working kernel, vs OpenCV", GREY)
+text(s, 6.5, 3.45, 3.0, 1.1, "Next: cache blocking for C ≥ 128 (where 4×3 collapses), then threads on 20 cores.", size=11.5, italic=True, color=MUTED)
 
 # ------------------------------------------------------------------ backup
 s = content_slide("Backup: the same sweeps with SiLU on",

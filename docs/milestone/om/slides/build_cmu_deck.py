@@ -316,17 +316,18 @@ stat(s, 6.75, 1.05, 2.75, "83–89%", "2×5 (v2's tile): 27–28.5 FLOPs/cycle, 
 stat(s, 6.75, 2.2, 2.75, "80–83%", "2×6: GCC adds register copies at 15 live registers", GREY)
 stat(s, 6.75, 3.35, 2.75, "k ≈ 500", "L1 dip: 2×5 weights pass 32 KB, like k ≈ 315 in A2", AMBER)
 
-# ------------------------------------------------------------------ 7. alone vs in a layer
-s = content_slide("Tied alone, 10 points apart in the layers",
-    "Two tiles with the same 10 accumulators: 1x10, one block of 8 channels times 10 pixels, and 2x5. Alone they tie: 85.8 and 85.3 percent. "
-    "Inside real layers 2x5 wins by 10 points: 76.8 against 67.0. "
-    "Alone, everything sits in L1, so 1x10's 11 loads per 10 FMAs still fit through the 2 load ports. "
-    "In a layer the inputs and weights stream from L2, and because each 1x10 call covers only 8 output channels, the layer reads every input row twice as often as with 2x5. "
-    "So loads become the limit. 2x5 needs only 7 loads per 10 FMAs, so it has room to spare. Lesson: pick the tile in the real layer, not only alone.")
+# ------------------------------------------------------------------ 7. 2x5 vs 2x6
+s = content_slide("12 accumulators lost to 10: GCC's register copies",
+    "The natural next step after 2x5 was 2x6: 12 accumulators instead of 10, two chains of slack beyond the minimum, still under 16 registers. "
+    "On paper it should be at least as fast. Measured, it loses both alone and in the layers: 81.2 against 85.3 percent alone at C = 64, and 75.3 against 76.8 in all 32 layers. "
+    "The reason is in GCC's generated code: at 15 live registers it inserts 11 register-to-register copies per tap, against 2 for 2x5. "
+    "Those copies take issue slots the FMAs need, so the extra accumulators buy nothing. "
+    "With intrinsics the compiler, not us, assigns registers, so the tile that leaves GCC room, 2x5 with 13 registers, is the one we keep. "
+    "In the layers the gap shrinks to 1.5 points because both kernels then also wait on data from L2.")
 cd = CategoryChartData()
-cd.categories = ["1×10 (10 acc)", "2×5 (10 acc)"]
-cd.add_series("alone", (85.8, 85.3))
-cd.add_series("in layers", (67.0, 76.8))
+cd.categories = ["2×5 (v2)", "2×6 (v4)"]
+cd.add_series("alone", (85.3, 81.2))
+cd.add_series("in layers", (76.8, 75.3))
 gc = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(0.5), Inches(1.1), Inches(4.4), Inches(3.5), cd)
 ch = gc.chart
 style_chart(ch, '0.0"%"', TEAL)
@@ -337,24 +338,23 @@ ch.legend.position, ch.legend.include_in_layout = XL_LEGEND_POSITION.BOTTOM, Fal
 ch.legend.font.size, ch.legend.font.name = Pt(10), FONT
 ch.value_axis.maximum_scale, ch.value_axis.minimum_scale, ch.value_axis.major_unit = 100, 0, 25
 ch.value_axis.tick_labels.number_format, ch.value_axis.tick_labels.number_format_is_linked = '0"%"', False
-chart_title(ch, "% of peak: alone (C = 64) vs in layers")
-rows2 = [("", "1×10", "2×5"), ("Loads per 10 FMAs", "11", "7"), ("Output channels per call", "8", "16"),
-         ("Times each input row is read", "2×", "1×")]
-tb = s.shapes.add_table(len(rows2), 3, Inches(5.2), Inches(1.15), Inches(4.3), Inches(1.5)).table
-for c, wd in enumerate((2.3, 1.0, 1.0)): tb.columns[c].width = Inches(wd)
+chart_title(ch, "% of peak: alone (C = 64) vs all 32 layers")
+rows2 = [("", "2×5", "2×6"), ("Accumulators", "10", "12"), ("Registers used (of 16)", "13", "15"),
+         ("Register copies per tap (GCC)", "2", "11"), ("Spills", "0", "0")]
+tb = s.shapes.add_table(len(rows2), 3, Inches(5.2), Inches(1.15), Inches(4.3), Inches(1.8)).table
+for c, wd in enumerate((2.5, 0.9, 0.9)): tb.columns[c].width = Inches(wd)
 for r, row in enumerate(rows2):
     for c, v in enumerate(row):
         cell = tb.cell(r, c); cell.text = v
-        cell.fill.solid(); cell.fill.fore_color.rgb = SOFT if r == 0 else WHITE
+        cell.fill.solid(); cell.fill.fore_color.rgb = SOFT if r == 0 else (PINK if r == 3 else WHITE)
         if v:
             f = cell.text_frame.paragraphs[0].runs[0].font
             f.size, f.name, f.color.rgb = Pt(11), FONT, INK
             f.bold = r == 0
-text(s, 5.2, 2.85, 4.3, 0.9, [[("Alone: ", {"bold": True, "color": INK}), ("all data in L1, so 1×10's extra loads still fit.", {})],
-                             [("In a layer: ", {"bold": True, "color": INK}), ("data streams from L2 and 1×10 reads inputs twice as often, so loads become the limit.", {})]],
+text(s, 5.2, 3.1, 4.3, 0.8, [[("Expected: ", {"bold": True, "color": INK}), ("12 chains ≥ 10 chains, so 2×6 at least as fast.", {})],
+                            [("Measured: ", {"bold": True, "color": INK}), ("GCC's extra copies take issue slots from the FMAs; 2×6 loses alone and in layers.", {})]],
      size=11.5, color=MUTED)
-text(s, 5.2, 3.95, 4.3, 0.6, "Pick the tile in the real layer, not only alone.", size=14, bold=True, italic=True, color=RED)
-text(s, 5.2, 4.5, 4.3, 0.2, "1×10 in layers: 4-layer tile sweep (C = 16–128).", size=9, color=MUTED)
+text(s, 5.2, 4.05, 4.3, 0.5, "With intrinsics, pick the tile that leaves the compiler room.", size=13, bold=True, italic=True, color=RED)
 
 # ------------------------------------------------------------------ 8. against OpenCV
 s = content_slide("1.24× faster than OpenCV on all 32 layers",

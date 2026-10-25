@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-o", "--out", default="results/ukr_design_space.png")
+ap.add_argument("--silu-on", action="store_true", help="isolated points with the fused SiLU (older sweeps) instead of results/ukr_C64_nosilu.csv")
 a = ap.parse_args()
 R = "results"
 
@@ -52,15 +53,25 @@ acc = {"1x1": 1, "1x2": 2, "2x1": 2, "1x4": 4, "2x2": 4, "1x5": 5, "2x4": 8, "1x
 X = {t: i for i, t in enumerate(tiles)}
 
 # (tile, label, impl, in-layer %, isolated %)
+C64 = f"{R}/ukr_C64_nosilu.csv"
+OFF = not a.silu_on and os.path.exists(C64)
+if OFF:
+    iso = lambda tile: iso_pct(C64, tile)
+else:
+    _src = {"2x5": f"{R}/ukr_sweep_2x6.csv", "2x6": f"{R}/ukr_sweep_2x6.csv", "2x6asm": f"{R}/ukr_sweep_2x6.csv",
+            "4x3asm": f"{R}/ukr_sweep.csv"}
+    iso = lambda tile: ISOLATED_EXTRA.get(tile) or (iso_pct(_src[tile], tile) if tile in _src else None)
 pts = [
-    ("2x5", "v2", "intr", layer_pct("s1_v2"), iso_pct(f"{R}/ukr_sweep_2x6.csv", "2x5")),
-    ("2x6", "v4", "intr", layer_pct("s1_v4"), iso_pct(f"{R}/ukr_sweep_2x6.csv", "2x6")),
-    ("4x3", "v8", "intr", layer_pct("s1_v8"), None),
-    ("2x5", "v2a", "asm", layer_pct("s1_v2a"), ISOLATED_EXTRA["2x5asm"]),
-    ("2x6", "v10", "asm", layer_pct("s1_v10"), iso_pct(f"{R}/ukr_sweep_2x6.csv", "2x6asm")),
-    ("2x5", "v2b", "asm", layer_pct("s1_v2b"), ISOLATED_EXTRA["2x5asm"]),
-    ("4x3", "v8a", "asm", layer_pct("s1_v8a"), iso_pct(f"{R}/ukr_sweep.csv", "4x3asm")),
+    ("2x5", "v2", "intr", layer_pct("s1_v2"), iso("2x5")),
+    ("2x6", "v4", "intr", layer_pct("s1_v4"), iso("2x6")),
+    ("4x3", "v8", "intr", layer_pct("s1_v8"), iso("4x3")),
+    ("2x5", "v2a", "asm", layer_pct("s1_v2a"), iso("2x5asm")),
+    ("2x6", "v10", "asm", layer_pct("s1_v10"), iso("2x6asm")),
+    ("2x5", "v2b", "asm", layer_pct("s1_v2b"), iso("2x5asm")),
+    ("4x3", "v8a", "asm", layer_pct("s1_v8a"), iso("4x3asm")),
 ]
+best_alone = max(v for *_, v in pts if v is not None)
+best_layer = max(l for *_, l, v in pts if l is not None)
 lecture = [("v6 unroll 9 taps", layer_pct("s1_v6")), ("v6b unroll 3", layer_pct("s1_v6b")),
            ("v7 pipelined", layer_pct("s1_v7")), ("v7b", layer_pct("s1_v7b"))]
 
@@ -73,15 +84,21 @@ axl.text(6.6, 14, "latency bound:\n~10% of peak\nper accumulator", color=AMBER, 
 lab_off = {"1x2": (-14, 6), "2x1": (10, -10), "1x4": (-14, 6), "2x2": (10, -10), "2x4": (-14, 6), "1x10": (10, -10), "2x5": (-16, 8)}
 for t in ["1x1", "1x2", "2x1", "1x4", "2x2", "1x5", "2x4", "1x10", "2x5"]:
     c = BLUE if t == "2x5" else GREY
-    axl.scatter(acc[t], sweep[t], s=50, color=c, zorder=3)
+    axl.scatter(acc[t], sweep[t], s=50, facecolors="white", edgecolors=c, linewidths=1.6, zorder=3)
+    v = iso(t) if OFF else None
+    if v is not None:
+        axl.scatter(acc[t], v, s=50, color=c, zorder=4)
+        axl.plot([acc[t], acc[t]], [sweep[t], v], color=c, lw=1, alpha=0.4, zorder=2)
+    top = v if v is not None else sweep[t]
     dx, dy = lab_off.get(t, (10, -4))
-    axl.annotate(f"{t}: {sweep[t]:.0f}%", (acc[t], sweep[t]), xytext=(dx, dy), textcoords="offset points",
+    txt = f"{t}: {v:.0f}% / {sweep[t]:.0f}%" if v is not None else f"{t}: {sweep[t]:.0f}%"
+    axl.annotate(txt, (acc[t], top), xytext=(dx, dy), textcoords="offset points",
                  ha="right" if dx < 0 else "left", fontsize=8.5, color=c)
 axl.axhline(100, color="#333", ls=":", lw=1)
 axl.set_xlim(0, 12.5); axl.set_ylim(0, 108)
 axl.set_xlabel("independent accumulators in the tile")
 axl.set_ylabel("% of one core's peak (32 FLOPs/cycle)")
-axl.set_title("1. How many accumulators: 10 (tile sweep, 4 layers)", fontsize=10.5, loc="left")
+axl.set_title("1. How many accumulators: 10" + (" (alone / in 4 layers)" if OFF else " (tile sweep, 4 layers)"), fontsize=10.5, loc="left")
 axl.grid(alpha=0.3)
 
 # ---- right: the design space at >= 10 accumulators, alone vs in the layers
@@ -109,16 +126,16 @@ axr.set_ylim(len(rows) - 0.3, -0.8)
 axr.set_xlim(40, 100); axr.axvline(100, color="#333", ls=":", lw=1)
 axr.set_xlabel("% of one core's peak")
 axr.grid(axis="x", alpha=0.3)
-axr.set_title("2. Same math, 50% to 89%: the tile, and who allocates registers", fontsize=10.5, loc="left")
+axr.set_title(f"2. Same math, {min(l for *_, l, v in pts if l):.0f}% to {best_alone:.0f}%: the tile, and who allocates registers", fontsize=10.5, loc="left")
 from matplotlib.lines import Line2D
-leg = [Line2D([], [], marker="o", ls="", color="#444", label="microkernel alone (bench_ukr, C = 64)"),
-       Line2D([], [], marker="o", ls="", mfc="white", mec="#444", mew=1.6, label="all 32 YOLOv8n layers"),
+leg = [Line2D([], [], marker="o", ls="", color="#444", label="microkernel alone (bench_ukr, C = 64, SiLU " + ("off)" if OFF else "on)")),
+       Line2D([], [], marker="o", ls="", mfc="white", mec="#444", mew=1.6, label="all 32 YOLOv8n layers (SiLU on)"),
        Line2D([], [], color=BLUE, lw=6, alpha=0.5, label="inline asm (registers fixed by hand)"),
        Line2D([], [], color=GREY, lw=6, alpha=0.5, label="intrinsics (GCC allocates)")]
 axr.legend(handles=leg, fontsize=8, loc="lower right", frameon=True)
-fig.suptitle("Stride-1 kernel design space on ece028: hand-allocated tiles reach 89% alone and 84% in all 32 layers",
+fig.suptitle(f"Stride-1 kernel design space on ece028: hand-allocated tiles reach {best_alone:.0f}% alone and {best_layer:.0f}% in all 32 layers",
              fontsize=12.5, x=0.01, ha="left")
-fig.text(0.01, 0.005, "1 core, perf_event core cycles, GCC 8.5 -O3 -march=broadwell, FP32. Sources: results/s1_*_b1_t1.csv, s1_tile_sweep.csv, ukr_sweep*.csv; v2a alone = one ece028 run.",
+fig.text(0.01, 0.005, "1 core, perf_event core cycles, GCC 8.5 -O3 -march=broadwell, FP32. Sources: results/s1_*_b1_t1.csv, s1_tile_sweep.csv, " + ("ukr_C64_nosilu.csv." if OFF else "ukr_sweep*.csv; v2a alone = one ece028 run.") + "",
          fontsize=7.5, color="#666")
 fig.tight_layout(rect=(0, 0.02, 1, 0.96))
 fig.savefig(a.out, dpi=170)

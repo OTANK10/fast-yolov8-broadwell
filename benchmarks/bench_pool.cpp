@@ -2,7 +2,7 @@
  * bench_pool.cpp  --  SPPF max-pool (model.9) on the real tensors: correctness vs
  * the baseline's own MaxPool outputs, then timing.
  *
- *   ./build/bench_pool data/tensors/b1 [v1|v2|v3|v4|ref] [--reps N] [--csv results/sppf_v2_b1_t1.csv]
+ *   ./build/bench_pool data/tensors/b1 [v1..v5|ref] [--reps N] [--csv results/sppf_v2_b1_t1.csv]
  *
  * Reads data/tensors/b<N>/model.9.m*.MaxPool/ (written by scripts/dump_layers.py):
  * the first pool's input is X, the three outputs are P1, P2, P3. Layout conversion
@@ -44,7 +44,7 @@ static void busy_warmup(double seconds) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: %s data/tensors/b1 [v1|v2|v3|v4|ref] [--reps N] [--csv out.csv]\n", argv[0]); return 1; }
+    if (argc < 2) { fprintf(stderr, "usage: %s data/tensors/b1 [v1..v5|ref] [--reps N] [--csv out.csv]\n", argv[0]); return 1; }
     std::string root = argv[1], ver = "v2";
     const char *csv = nullptr;
     long reps = 0;
@@ -79,8 +79,8 @@ int main(int argc, char **argv) {
     std::vector<float> x = read_bin(root + "/" + dirs[0] + "/input.bin", img), want[3];
     for (int p = 0; p < 3; p++) want[p] = read_bin(root + "/" + dirs[p] + "/output.bin", img);
 
-    pool_fn_t fn = ver == "v1" ? sppf_pool_v1 : ver == "v2" ? sppf_pool_v2 : ver == "v3" ? sppf_pool_v3 : ver == "v4" ? sppf_pool_v4 : nullptr;
-    if (!fn && ver != "ref") { fprintf(stderr, "unknown version %s (v1, v2, v3, v4, ref)\n", ver.c_str()); return 1; }
+    pool_fn_t fn = ver == "v1" ? sppf_pool_v1 : ver == "v2" ? sppf_pool_v2 : ver == "v3" ? sppf_pool_v3 : ver == "v4" ? sppf_pool_v4 : ver == "v5" ? sppf_pool_v5 : nullptr;
+    if (!fn && ver != "ref") { fprintf(stderr, "unknown version %s (v1..v5, ref)\n", ver.c_str()); return 1; }
 
     /* layouts, outside timing */
     const int halo = 1;
@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
     }
     const double cyc = best * turbo / base, us = best / (base * 1e3);
     const double vecs = 3.0 * N * (C / CB) * H * W;                       /* output vectors, all 3 pools */
-    const int rows_mode = (ver == "v3" || ver == "v4") ? 2 : ver == "v2", cols_mode = ver == "v2";
+    const int rows_mode = (ver == "v3" || ver == "v4" || ver == "v5") ? 2 : ver == "v2", cols_mode = ver == "v2";
     const double vmax = 3.0 * N * (C / CB) * ((double)H * sppf_vmax_per_line(W, rows_mode) + (double)W * sppf_vmax_per_line(H, cols_mode));
     const double bytes = 5.0 * img * sizeof(float);                        /* read X + write X, P1, P2, P3 */
     printf("  %.2f us  %.0f cycles  %.2f cycles/output vector  ", us, cyc, cyc / vecs);

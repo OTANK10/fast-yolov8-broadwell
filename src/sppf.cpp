@@ -20,6 +20,7 @@
  *    buffer that model.9.cv2 reads, so the Concat is free. Slice 0 is a copy of X
  *    (in the full network cv1 would write it there directly).
  *  v1: direct 5-wide max, 4 vmaxps per output per pass (8 per pool).
+ *  v5: v4 with rotated row pointers instead of r % 5 (imul shares port 1 with vmaxps).
  *  v4: v3 without the tmp plane (5-row ring), so one pool fits in L1 (see below).
  *  v3: v2's rows pass with straight-line edges, columns pass done row by row (see below).
  *  v2: reuses pair maxes P[j] = max(s[j], s[j+1]); out[i] = max(P[i-2], P[i], s[i+2]),
@@ -190,6 +191,40 @@ static void pool5_plane_v4(const float *src, size_t sr, float *dst, size_t dr, f
     }
 }
 
+/* v5: v4 without its integer overhead. perf on ece028 for v4: store-buffer stalls fell from 36% to
+ * 18% of cycles and 4K-alias blocks from 5.3 G to 1.7 G, but port 1 ran 29.4 G uops against v2's
+ * 22.1 G for about the same 22 G vmaxps: the ring index r % 5 compiles to an imul sequence, and imul
+ * runs on port 1, the same port as vmaxps. v5 keeps 5 row pointers and rotates them once per output
+ * row, so the per-pixel loops have no index math beyond the pointer increments. */
+static void pool5_plane_v5(const float *src, size_t sr, float *dst, size_t dr, float *ring, int H, int W) {
+    const size_t tr = (size_t)W * CB;
+    /* rp[k] = rows-pass result of row y-2+k (k = 0..4), slots of the ring */
+    float *rp[5] = {ring, ring + tr, ring + 2 * tr, ring + 3 * tr, ring + 4 * tr};
+    /* prime: rows 0 and 1 go to the slots of y-2+k for y = 0, i.e. k = 2, 3 */
+    for (int r = 0; r < std::min(2, H); r++) pool5_row_v3(src + r * sr, rp[2 + r], W);
+    for (int y = 0; y < H; y++) {
+        if (y + 2 < H) pool5_row_v3(src + (y + 2) * sr, rp[4], W);   /* the row entering the window */
+        const int lo = std::max(0, y - 2) - (y - 2), hi = std::min(H - 1, y + 2) - (y - 2);  /* k range */
+        float *o = dst + y * dr;
+        if (lo == 0 && hi == 4) {
+            const float *r0 = rp[0], *r1 = rp[1], *r2 = rp[2], *r3 = rp[3], *r4 = rp[4];
+            for (int x = 0; x < W; x++) {
+                const size_t q = (size_t)x * CB;
+                const vec a = vmax(vload(r0 + q), vload(r1 + q)), b = vmax(vload(r2 + q), vload(r3 + q));
+                vstore(o + q, vmax(vmax(a, b), vload(r4 + q)));
+            }
+        } else {
+            for (int x = 0; x < W; x++) {
+                const size_t q = (size_t)x * CB;
+                vec m = vload(rp[lo] + q);
+                for (int k = lo + 1; k <= hi; k++) m = vmax(m, vload(rp[k] + q));
+                vstore(o + q, m);
+            }
+        }
+        float *t = rp[0]; rp[0] = rp[1]; rp[1] = rp[2]; rp[2] = rp[3]; rp[3] = rp[4]; rp[4] = t;  /* slide down one row */
+    }
+}
+
 /* per-thread scratch for the rows pass, allocated once (never inside a timed call after the first) */
 static float *scratch(size_t nfloats) {
     static thread_local float *buf = nullptr;
@@ -210,9 +245,9 @@ static void sppf_pool_blk(int N, int C, int H, int W, const float *in, int in_ha
             float *o[4];
             for (int k = 0; k < 4; k++) o[k] = out + blk_idx(4 * Cb, Hpo, Wpo, n, k * Cb + cb, out_halo, out_halo);
             for (int y = 0; y < H; y++) std::memcpy(o[0] + y * ro, x + y * ri, (size_t)W * CB * sizeof(float)); /* slice 0: X */
-            if (VER == 4) pool5_plane_v4(x, ri, o[1], ro, tmp, H, W); else if (VER == 3) pool5_plane_v3(x, ri, o[1], ro, tmp, H, W); else pool5_plane<VER == 2>(x, ri, o[1], ro, tmp, H, W);       /* P1 = P(X)  */
-            if (VER == 4) pool5_plane_v4(o[1], ro, o[2], ro, tmp, H, W); else if (VER == 3) pool5_plane_v3(o[1], ro, o[2], ro, tmp, H, W); else pool5_plane<VER == 2>(o[1], ro, o[2], ro, tmp, H, W);    /* P2 = P(P1) */
-            if (VER == 4) pool5_plane_v4(o[2], ro, o[3], ro, tmp, H, W); else if (VER == 3) pool5_plane_v3(o[2], ro, o[3], ro, tmp, H, W); else pool5_plane<VER == 2>(o[2], ro, o[3], ro, tmp, H, W);    /* P3 = P(P2) */
+            if (VER == 5) pool5_plane_v5(x, ri, o[1], ro, tmp, H, W); else if (VER == 4) pool5_plane_v4(x, ri, o[1], ro, tmp, H, W); else if (VER == 3) pool5_plane_v3(x, ri, o[1], ro, tmp, H, W); else pool5_plane<VER == 2>(x, ri, o[1], ro, tmp, H, W);       /* P1 = P(X)  */
+            if (VER == 5) pool5_plane_v5(o[1], ro, o[2], ro, tmp, H, W); else if (VER == 4) pool5_plane_v4(o[1], ro, o[2], ro, tmp, H, W); else if (VER == 3) pool5_plane_v3(o[1], ro, o[2], ro, tmp, H, W); else pool5_plane<VER == 2>(o[1], ro, o[2], ro, tmp, H, W);    /* P2 = P(P1) */
+            if (VER == 5) pool5_plane_v5(o[2], ro, o[3], ro, tmp, H, W); else if (VER == 4) pool5_plane_v4(o[2], ro, o[3], ro, tmp, H, W); else if (VER == 3) pool5_plane_v3(o[2], ro, o[3], ro, tmp, H, W); else pool5_plane<VER == 2>(o[2], ro, o[3], ro, tmp, H, W);    /* P3 = P(P2) */
         }
 }
 } // namespace
@@ -228,6 +263,9 @@ void sppf_pool_v3(int N, int C, int H, int W, const float *in, int in_halo, floa
 }
 void sppf_pool_v4(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo) {
     sppf_pool_blk<4>(N, C, H, W, in, in_halo, out, out_halo);
+}
+void sppf_pool_v5(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo) {
+    sppf_pool_blk<5>(N, C, H, W, in, in_halo, out, out_halo);
 }
 /* vmaxps one pool issues on an n-long line: pair 0 = direct, 1 = v2 pairs, 2 = v3 rows pass */
 long sppf_vmax_per_line(int n, int pair) {

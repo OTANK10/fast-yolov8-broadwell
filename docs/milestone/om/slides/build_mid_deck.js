@@ -101,31 +101,35 @@ pres.addSection({ title: "Method" });
                      border: { type: "solid", pt: 0.75, color: HEX.grid }, rowH: 0.42, valign: "middle", objectName: "a2-table" });
   T(s, "Same Broadwell core: 2 FMA units × 8 lanes × 2 FLOPs = 32 FLOPs/cycle. Latency 5 × throughput 2 = 10 chains in flight.",
     { x: 0.5, y: 4.3, w: 4.9, h: 0.7, fontSize: 13, color: C.text2 });
-  // register tile drawing
-  const x0 = 6.45, y0 = 1.75, cw = 0.6, ch = 0.62, gap = 0.06;
-  T(s, "one step: 5 broadcasts × 2 weight vectors", { x: 5.65, y: 1.15, w: 3.9, h: 0.3, fontSize: 12, color: C.text2 });
-  for (let j = 0; j < 5; j++) {
-    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: x0 + j * (cw + gap), y: y0 - 0.33, w: cw, h: 0.26, rectRadius: 0.04,
-      fill: { color: "FFFFFF" }, line: { color: HEX.ink, width: 1 }, objectName: `bcast-${j}` });
-    T(s, `x${j}`, { x: x0 + j * (cw + gap), y: y0 - 0.33, w: cw, h: 0.26, fontSize: 11, align: "center", valign: "middle", fontFace: "Courier New" });
-  }
-  for (let k = 0; k < 2; k++) {
-    const y = y0 + k * (ch + gap);
-    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: x0 - 0.62, y, w: 0.5, h: ch, rectRadius: 0.04, fill: { color: HEX.amberSoft },
-      line: { color: HEX.amber, width: 1 }, objectName: `weight-${k}` });
-    T(s, `w${k}`, { x: x0 - 0.62, y, w: 0.5, h: ch, fontSize: 12, align: "center", valign: "middle", fontFace: "Courier New" });
-    for (let j = 0; j < 5; j++) {
-      s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: x0 + j * (cw + gap), y, w: cw, h: ch, rectRadius: 0.05, fill: { color: HEX.tealSoft },
-        line: { color: HEX.teal, width: 1 }, objectName: `acc-${k}-${j}` });
-      T(s, `acc\n${k},${j}`, { x: x0 + j * (cw + gap), y, w: cw, h: ch, fontSize: 10, align: "center", valign: "middle", fontFace: "Courier New" });
-    }
-  }
-  T(s, "7 loads feed 10 FMAs = 80 multiply-adds. Each weight is reused 5×, each broadcast 2×; accumulators stay in registers for all C × 9 steps, then one store.",
-    { x: 5.65, y: 3.3, w: 3.85, h: 0.95, fontSize: 13 });
-  T(s, "m = pixels, n = output channels, k = input channels × 3 × 3", { x: 5.65, y: 4.35, w: 3.85, h: 0.5, fontSize: 13, italic: true, color: C.accent1 });
+  // the four terms the rest of the talk uses
+  const defs = [["C", "input channels of the layer (16 to 256)"],
+                ["k = C × 9", "multiply-adds per output: C channels × the 9 taps of the 3×3 filter (A2's k)"],
+                ["accumulator", "one YMM register = 8 outputs (8 channels of one pixel); one dependency chain"],
+                ["tile 2×5 (10)", "outputs per call: 2 blocks of 8 channels × 5 pixels = 80 outputs in 10 accumulators"]];
+  defs.forEach(([h, b], i) => {
+    const y = 1.2 + i * 0.95;
+    card(s, 5.65, y, 3.9, 0.85, i === 3 ? HEX.tealSoft : HEX.soft, `term-${i}`);
+    T(s, h, { x: 5.8, y: y + 0.08, w: 3.65, h: 0.28, fontSize: 13, bold: true, color: i === 3 ? C.accent1 : C.text1, fontFace: "Courier New" });
+    T(s, b, { x: 5.8, y: y + 0.38, w: 3.65, h: 0.45, fontSize: 11, color: C.text2 });
+  });
   s.addNotes("Same machine as Assignment 2 and the same kernel. In A2, m was 5 rows of A broadcast, n was 8 doubles = 2 vectors of B. " +
     "Here m is 5 output pixels, n is 16 output channels = 2 vectors of 8 floats, and k is input channels times the 9 taps of the 3x3 filter. " +
-    "10 accumulators, 13 registers, exactly the A2 budget. Peak is 32 FLOPs per cycle because floats give 8 lanes instead of 4.");
+    "10 accumulators, 13 registers, exactly the A2 budget. Peak is 32 FLOPs per cycle because floats give 8 lanes instead of 4. " +
+    "Terms: C is input channels; k = C x 9 is the length of each output's sum; an accumulator is one register holding 8 outputs; the tile is the block of outputs one call computes.");
+}
+
+// ---------------------------------------------------------------- 2b. the tile as tensors
+{
+  const s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Method" });
+  s.addText("One kernel call = 80 outputs", { placeholder: "title" });
+  s.addImage({ path: fig("docs/milestone/om/figs/tile_tensors.png"), x: 0.5, y: 1.2, w: 9.0, h: 2.62,
+               altText: "Input map with a 3 by 7 window across all C channels, 16 filters of 3 by 3 by C, and the output tile of 1 row, 5 pixels and 16 channels" });
+  T(s, "Per step (one input channel at one of the 9 taps): load 2 weight vectors, broadcast 5 inputs, 10 FMAs. Repeat k = C × 9 times, then bias, SiLU and one store per register.",
+    { x: 0.5, y: 4.15, w: 9.0, h: 0.8, fontSize: 15 });
+  s.addNotes("One call of the microkernel computes this teal strip: one output row, 5 pixels wide, 16 output channels deep, 80 numbers. " +
+    "Each cell is 8 channels of one pixel, which is exactly one YMM register, so the strip is 10 accumulators. " +
+    "To compute it, the kernel reads a 3 by 7 window of the input across all C channels and 16 filters of 3 by 3 by C. " +
+    "Each step multiplies 2 weight vectors by 5 broadcast inputs, 10 FMAs, and it repeats that k = C times 9 times before applying bias and SiLU and storing.");
 }
 
 // ---------------------------------------------------------------- 3. four steps

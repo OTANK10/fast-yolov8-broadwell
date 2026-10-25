@@ -242,6 +242,93 @@ text(s, 4.47, 1.5, 4.95, 2.4, code, size=8.5, font="Courier New", color=INK)
 text(s, 4.35, 4.03, 5.15, 0.55, "Weights packed [K/8][C/8][3][3][8 ic][8 oc]; activations NCHW8c with a 1-pixel zero halo, so no edge branches. "
      "Outer loops: output-channel pairs kb, rows oh, pixel groups ow of 5.", size=9.5, color=MUTED)
 
+# ------------------------------------------------------------------ 3e. memory layout: what
+def cell(slide, x, y, w, h, lab, fc, ec, size=8, bold=False, dash=False):
+    b = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+    b.fill.solid(); b.fill.fore_color.rgb = fc; b.line.color.rgb = ec; b.line.width = Pt(0.75); b.shadow.inherit = False
+    if dash: b.line.dash_style = 4
+    tf = b.text_frame; tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    r = tf.paragraphs[0].add_run(); r.text = lab; tf.paragraphs[0].alignment = PP_ALIGN.CENTER
+    r.font.size, r.font.name, r.font.color.rgb, r.font.bold = Pt(size), FONT, ec, bold
+    return b
+
+s = content_slide("Memory layout: NCHW8c with a zero halo",
+    "ONNX stores activations as NCHW: all of channel 0, then all of channel 1. The 8 channels of one pixel are then H times W floats apart, "
+    "so filling one register with them takes 8 separate loads. We store NCHW8c: channels in blocks of 8, and inside a block the 8 channels of a pixel sit next to each other, "
+    "32 bytes, one aligned load into one YMM register. Around every plane we store a 1-pixel border of zeros, the halo, which is the convolution's padding written out. "
+    "A 3 by 3 window at the image edge then just reads zeros, so there is no if-statement for edges. A kernel writes only the interior, so the next layer can read its output directly. "
+    "Weights are packed once, offline, like the BatchNorm folding: for one input channel and one tap, the weights of 8 output channels are 8 contiguous floats, one aligned load, in the order the loop reads them.")
+CH = [RGBColor(0xD7, 0xEA, 0xF0), RGBColor(0xF5, 0xE6, 0xCF), RGBColor(0xE4, 0xE0, 0xF0), RGBColor(0xDF, 0xEE, 0xDC)]
+CE = [TEAL, AMBER, RGBColor(0x5B, 0x4B, 0x8A), RGBColor(0x3D, 0x7A, 0x3A)]
+cw = 0.33
+text(s, 0.5, 1.05, 5.6, 0.3, [[("ONNX NCHW: ", {"bold": True, "color": INK}), ("channel planes one after another", {})]], size=11.5, color=MUTED)
+for i in range(16):
+    c, px = i // 4, i % 4
+    hit = px == 0
+    cell(s, 0.5 + i * cw, 1.4, cw - 0.02, 0.36, f"c{c}p{px}", CH[c] if hit else WHITE, CE[c], size=7, bold=hit)
+text(s, 0.5, 1.8, 5.6, 0.3, "pixel p0's channels are H×W floats apart: 8 loads to fill one register", size=10, color=RED)
+text(s, 0.5, 2.2, 5.6, 0.3, [[("NCHW8c: ", {"bold": True, "color": INK}), ("[N][C/8][H+2][W+2][8], 8 channels of a pixel together", {})]], size=11.5, color=MUTED)
+for i in range(16):
+    px, c = i // 8, i % 8
+    hit = px == 0
+    cell(s, 0.5 + i * cw, 2.55, cw - 0.02, 0.36, f"p{px}c{c}", CH[c % 4] if hit else WHITE, CE[c % 4], size=7, bold=hit)
+br = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.48), Inches(2.52), Inches(8 * cw + 0.0), Inches(0.42))
+br.fill.background(); br.line.color.rgb = RED; br.line.width = Pt(2); br.shadow.inherit = False
+text(s, 0.5, 2.95, 5.6, 0.3, "8 contiguous floats = 32 bytes = one _mm256_load_ps = one YMM register", size=10, color=RED)
+card(s, 0.5, 3.4, 5.3, 1.15, SOFT, "w-card")
+text(s, 0.62, 3.47, 5.1, 0.28, "Weights, packed once offline: [K/8][C/8][3][3][8 in][8 out]", size=11.5, bold=True)
+text(s, 0.62, 3.77, 5.1, 0.75, "For one input channel and one tap, the 8 output-channel weights are contiguous: one aligned load is w0 or w1. "
+     "The loop walks the array front to back. BatchNorm is already folded into weights and bias.", size=9.5, color=MUTED)
+# halo grid
+gx, gy, g = 6.25, 1.4, 0.36
+text(s, 6.15, 1.05, 3.4, 0.3, [[("Zero halo: ", {"bold": True, "color": INK}), ("padding stored", {})]], size=11.5, color=MUTED)
+for r in range(6):
+    for c in range(8):
+        border = r in (0, 5) or c in (0, 7)
+        win = r <= 2 and c <= 2
+        fc = RGBColor(0xE6, 0xEB, 0xEE) if border else TEALSOFT
+        ec = AMBER if win else (GREY if border else TEAL)
+        b = cell(s, gx + c * g, gy + r * g, g - 0.03, g - 0.03, "0" if border else "", fc, ec, size=8)
+        if win: b.line.width = Pt(2)
+text(s, 6.15, 3.65, 3.4, 0.9, [[("grey: ", {"bold": True, "color": GREY}), ("stored zeros, 1 pixel wide", {})],
+                              [("amber: ", {"bold": True, "color": AMBER}), ("a 3×3 window at the corner reads zeros, no if-statement", {})],
+                              [("teal: ", {"bold": True, "color": TEAL}), ("interior, the only part a kernel writes", {})]], size=9.5, color=MUTED)
+
+# ------------------------------------------------------------------ 3f. memory layout: why
+s = content_slide("Why this layout: one load, no branches",
+    "Why we chose it. First, vectors: every register the kernel needs, a weight vector or an output, is one aligned load or store; NCHW would need 8 loads per register. "
+    "Second, no branches: because the padding is stored, every microkernel call runs the same code, also at the image edge. The cost is memory: 2.5 percent at 160 by 160, 21 percent at 20 by 20. "
+    "Third, one layout for all three kernels, stride 1, stride 2 and 1 by 1, so layers chain with no conversion; we convert only at the network input and output, outside the timing. "
+    "C2f's Split becomes a pointer offset and Concat is the producer writing into its slice. "
+    "Fourth, the cache: the weights one 2x5 tile reads are 576 times C bytes. Up to C = 32 they fit in L1, up to C = 256 in L2, and they are reused across the whole output plane. "
+    "Only the two C = 256 head layers, where weights plus the 400 KB input exceed L2, lose noticeably; input-channel blocking is the next step.")
+why = [("One load per register", "8 channels contiguous: weights and outputs are single aligned 32 B loads/stores. NCHW: 8 loads per vector."),
+       ("No branches", "Padding is stored, so every call is identical, edges included. Cost: +2.5% memory at 160×160, +21% at 20×20."),
+       ("One layout, 3 kernels", "Stride 1, stride 2 and 1×1 share it: no conversion between layers. Split = pointer offset, Concat = write into a slice."),
+       ("Weights in loop order", "Packed once offline; loads walk forward through memory, which the hardware prefetcher follows.")]
+for i, (h, b) in enumerate(why):
+    col, row = i % 2, i // 2
+    x, y = 0.5 + col * 2.6, 1.1 + row * 1.25
+    card(s, x, y, 2.48, 1.15, PINK if i == 0 else SOFT, f"why-{i}")
+    text(s, x + 0.1, y + 0.07, 2.3, 0.28, h, size=11.5, bold=True, color=RED if i == 0 else INK)
+    text(s, x + 0.1, y + 0.36, 2.3, 0.78, b, size=9, color=MUTED)
+text(s, 5.85, 1.05, 3.7, 0.3, "Weights one 2×5 tile reads: 576 · C bytes", size=11.5, bold=True)
+wrows = [("C", "Weights", "Fits in"), ("16", "9 KB", "L1 (32 KB)"), ("32", "18 KB", "L1"), ("64", "37 KB", "L2 (256 KB)"),
+         ("128", "74 KB", "L2"), ("256", "147 KB", "L2, but + 400 KB input > L2")]
+tb = s.shapes.add_table(len(wrows), 3, Inches(5.85), Inches(1.4), Inches(3.65), Inches(1.9)).table
+for c, wd in enumerate((0.55, 0.85, 2.25)): tb.columns[c].width = Inches(wd)
+for r, row in enumerate(wrows):
+    for c, v in enumerate(row):
+        cl = tb.cell(r, c); cl.text = v
+        cl.fill.solid(); cl.fill.fore_color.rgb = SOFT if r == 0 else (PINK if r == 5 else WHITE)
+        cl.margin_left = cl.margin_right = Inches(0.06)
+        f = cl.text_frame.paragraphs[0].runs[0].font
+        f.size, f.name, f.color.rgb, f.bold = Pt(10.5), FONT, INK, r == 0
+text(s, 5.85, 3.45, 3.65, 1.1, [[("Reused across the whole output plane, ", {"bold": True, "color": INK}), ("so L2-resident layers still reach 73–80% of peak.", {})],
+                               [("C = 256 head layers: 67–71%. ", {"bold": True, "color": INK}), ("Next: input-channel blocking.", {})]],
+     size=10, color=MUTED)
+
 # ------------------------------------------------------------------ 3b. assumptions
 s = content_slide("How the numbers are measured",
     "These are the assumptions behind every number in the talk. The important one: we count rdtsc ticks, which run at the fixed 2.4 GHz base clock, and scale them by 3.4 over 2.4, the ratio of max turbo to base, "

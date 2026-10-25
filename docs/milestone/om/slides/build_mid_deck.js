@@ -79,7 +79,7 @@ pres.addSection({ title: "Intro" });
   });
   s.addNotes("My kernel is the 3x3 stride-1 convolution: 32 layers, the C2f bottlenecks and the Detect head, two thirds of YOLOv8n's work. " +
     "The story: it is the Assignment 2 kernel, I followed the same four steps, and the measurements chose the tile. " +
-    "Best microkernel alone: 94% of the 32 FLOPs/cycle peak; inside all 32 real layers: 84%.");
+    "Best microkernel alone: 94% of the 32 FLOPs/cycle peak; inside all 32 real layers: 84%. All percentages assume the core runs at 3.4 GHz, as in Assignment 2.");
 }
 
 // ---------------------------------------------------------------- 2. same as A2
@@ -140,7 +140,7 @@ pres.addSection({ title: "Method" });
     ["Independent ops", "Every output is its own dot product of length C × 9: 102,400 in a 40×40, 64-channel layer."],
     ["Outputs in flight", "Latency 5 × 2 FMA/cycle = 10 accumulators; 1 accumulator runs at exactly 10% of peak."],
     ["Kernel size", "2×5 tile: 10 acc + 2 weights + 1 broadcast = 13 regs; 7 loads per 10 FMAs; 5 divides every width."],
-    ["Benchmark like A2", "Microkernel alone, k = 72 to 4608, 3 runs, 2 s warm-up, core cycles, checked vs a reference."],
+    ["Benchmark like A2", "Microkernel alone, k = 72 to 4608, 3 runs, 2 s warm-up, cycles at 3.4 GHz as in A2, checked vs a reference."],
   ];
   steps.forEach(([h, b], i) => {
     const y = 1.2 + i * 0.98;
@@ -150,7 +150,7 @@ pres.addSection({ title: "Method" });
     T(s, b, { x: 1.1, y: y + 0.32, w: 3.6, h: 0.62, fontSize: 12, color: C.text2 });
   });
   const tiles = ["1×1 (1)", "2×2 (4)", "1×5 (5)", "2×4 (8)", "1×10 (10)", "2×5 (10)"];
-  const vals = [10.1, 39.4, 49.9, 72.4, 84.0, 84.4]; // bench_ukr 64 --no-silu, results/ukr_C64_nosilu.csv
+  const vals = [9.9, 39.3, 49.6, 72.4, 85.8, 85.3]; // bench_ukr 64 --no-silu (3.4 GHz), results/ukr_C64_nosilu_34.csv
   s.addChart(pres.charts.BAR, [{ name: "% of peak", labels: tiles, values: vals }], Object.assign({}, chartText, {
     x: 5.0, y: 1.05, w: 4.55, h: 3.95, barDir: "col", chartColors: [HEX.teal], showValue: true, dataLabelPosition: "outEnd",
     dataLabelFormatCode: "0\"%\"", valAxisMaxVal: 100, valAxisMinVal: 0, valAxisMajorUnit: 25, valAxisLabelFormatCode: "0\"%\"",
@@ -169,7 +169,7 @@ pres.addSection({ title: "Results" });
   s.addText("Same math, 50% to 95%: tile and register allocation", { placeholder: "title" });
   s.addImage({ path: fig("results/ukr_design_space.png"), x: 0.5, y: 1.0, w: 7.5, h: 4.08, altText: "Design space: percent of peak for every stride-1 kernel, alone and in all 32 layers" });
   const pts = [["Intrinsics", "GCC: clean at 13 regs, copies at 15, spills at 16"],
-               ["Inline asm", "2×6 by hand: 94.5% alone, 84% in layers"],
+               ["Inline asm", "2×6 by hand: 95% alone, 84% in layers"],
                ["Unroll, pipeline", "lost: uop cache, spills"]];
   pts.forEach(([h, b], i) => {
     const y = 1.05 + i * 1.37;
@@ -179,7 +179,7 @@ pres.addSection({ title: "Results" });
   });
   s.addNotes("Every kernel I built, same arithmetic, same layout. Filled dots are the microkernel alone, hollow are all 32 layers. " +
     "Left: the accumulator count. Right: the 2x6 tile my teammates suggested loses with intrinsics because GCC adds 11 register copies per tap at 15 live registers, " +
-    "but with the registers fixed in inline asm it is the best kernel, 94.5% alone. 4x3 needs all 16 registers; GCC spills it to 49%. " +
+    "but with the registers fixed in inline asm it is the best kernel, 95% alone. 4x3 needs all 16 registers; GCC spills it to 49%. " +
     "The lecture techniques, unrolling and software pipelining, made it worse: full unrolling overflowed the uop cache and partial unrolling made GCC spill.");
 }
 
@@ -187,26 +187,26 @@ pres.addSection({ title: "Results" });
 {
   const s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Results" });
   s.addText("Benchmarked like Assignment 2: FLOPs/cycle vs k", { placeholder: "title" });
-  s.addImage({ path: fig("results/ukr_sweep_nosilu.png"), x: 0.5, y: 1.0, w: 6.5, h: 3.47, altText: "FLOPs per cycle vs k for the 2x5, 2x6 and 2x6 asm microkernels with SiLU off" });
-  T(s, "SiLU off: the pure convolution, as in A2. 3 runs, core cycles, every point checked (576 pass).", { x: 0.5, y: 4.55, w: 6.5, h: 0.5, fontSize: 12, color: C.text2 });
-  stat(s, 7.3, 1.05, 2.25, "94–98%", "2×6 asm: 30–31 FLOPs/cycle, 96 GFLOP/s on one core");
-  stat(s, 7.3, 2.45, 2.25, "85–90%", "2×5 intrinsics (v2's tile)", C.accent3);
+  s.addImage({ path: fig("results/ukr_sweep_nosilu_34.png"), x: 0.5, y: 1.0, w: 6.5, h: 3.47, altText: "FLOPs per cycle vs k for the 2x5, 2x6 and 2x6 asm microkernels with SiLU off" });
+  T(s, "SiLU off, cycles = time × 3.4 GHz, as in A2. 3 runs, every point checked (576 pass).", { x: 0.5, y: 4.55, w: 6.5, h: 0.5, fontSize: 12, color: C.text2 });
+  stat(s, 7.3, 1.05, 2.25, "94–97%", "2×6 asm: 30–31 FLOPs/cycle, ~102 GFLOP/s on one core");
+  stat(s, 7.3, 2.45, 2.25, "83–89%", "2×5 intrinsics (v2's tile)", C.accent3);
   stat(s, 7.3, 3.85, 2.25, "k ≈ 500", "L1 dip: 2×5 weights pass 32 KB, like k ≈ 315 in A2", C.accent2);
   s.addNotes("This is the Assignment 2 figure for my kernel: FLOPs per cycle against the reduction length k. " +
-    "2x6 asm holds 30 to 31 FLOPs per cycle, 94 to 98 percent of peak. 2x5 intrinsics is 85 to 90. " +
+    "Cycles are time times 3.4 GHz, the max turbo, exactly as in Assignment 2, so this can only understate. 2x6 asm holds 30 to 31 FLOPs per cycle, 94 to 97 percent of peak. 2x5 intrinsics is 83 to 89. " +
     "The dip near k = 500 is the 2x5 weights leaving L1, the same effect as k = 315 in A2. " +
-    "Cross-checked: the hardware FP-instruction counter matches our FLOP count exactly, and cycles over wall time gives 3.2 GHz.");
+    "Cross-checked: the hardware FP-instruction counter matches our FLOP count exactly, and real perf cycles give the same or slightly higher numbers.");
 }
 
 // ---------------------------------------------------------------- 6. alone vs layers + baselines
 {
   const s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Results" });
   s.addText("Alone vs in a layer: keep the kernel a function", { placeholder: "title" });
-  T(s, "v2a (2×5 asm): 90.2% alone, 73.6% when GCC inlines it into the layer loop", { x: 0.5, y: 1.1, w: 4.6, h: 0.55, fontSize: 14, bold: true });
+  T(s, "v2a (2×5 asm): 92.2% alone, 72.5% when GCC inlines it into the layer loop", { x: 0.5, y: 1.1, w: 4.6, h: 0.55, fontSize: 14, bold: true });
   card(s, 0.5, 1.75, 4.6, 1.15, HEX.soft, "spill-code");
   T(s, "vmovaps 168(%rsp), %ymm1   # reload acc\n  ...asm block: 80 FMAs...\nvmovaps %ymm1, 168(%rsp)   # store acc",
     { x: 0.65, y: 1.85, w: 4.35, h: 0.95, fontSize: 11, fontFace: "Courier New", color: C.text1, valign: "middle" });
-  T(s, "Inlined, GCC keeps 3 of 10 accumulators on the stack around every tap. Called as a function, as in the benchmark: 83.4% (v2b); with the 2×6 tile, 84.1% (v10).",
+  T(s, "Inlined, GCC keeps 3 of 10 accumulators on the stack around every tap. Called as a function, as in the benchmark: 83.1% (v2b); with the 2×6 tile, 83.7% (v10).",
     { x: 0.5, y: 3.0, w: 4.6, h: 0.95, fontSize: 13, color: C.text2 });
   T(s, "Next: cache blocking for C ≥ 128 (the 4×3 drop-off), NUMA-aware threads (v10 on 20 cores: 4.74 ms).",
     { x: 0.5, y: 4.15, w: 4.6, h: 0.8, fontSize: 13, italic: true, color: C.accent1 });
@@ -217,9 +217,9 @@ pres.addSection({ title: "Results" });
     dataLabelFormatCode: "0.0\" ms\"", valAxisMinVal: 0, valAxisMaxVal: 100, valAxisMajorUnit: 25, showLegend: false, showTitle: true,
     title: "All 32 layers, 1 thread, SiLU on (lower is better)", titleFontSize: 12, titleColor: HEX.ink, catAxisOrientation: "maxMin",
     objectName: "baseline-chart" }));
-  s.addNotes("Kernel A, 2x5 in asm, beat kernel B, 2x5 intrinsics, by 6 points alone but lost by 3.5 in the layers. " +
+  s.addNotes("Kernel A, 2x5 in asm, beat kernel B, 2x5 intrinsics, by 7 points alone but lost by 4 in the layers. " +
     "The assembly shows why: inlined into the layer loop, GCC keeps 3 accumulators on the stack and reloads them around every tap. " +
-    "Calling the microkernel as a function, exactly as the benchmark does, fixes it: 83.4% for 2x5 and 84.1% for v10. " +
+    "Calling the microkernel as a function, exactly as the benchmark does, fixes it: 83.1% for 2x5 and 83.7% for v10, all at 3.4 GHz. " +
     "v10 is 1.36 times faster than OpenCV and within 2% of ONNX Runtime on all 32 layers. Next: cache blocking and threading.");
 }
 

@@ -119,7 +119,7 @@ static Result run_tile(const s1_ukr_entry_t &k, Data &d, int fs, long reps, int 
     r.rel = err / std::max(mx, 1e-30);
     r.pass = r.rel <= 1e-4;
     r.flops = 2.0 * k.KB * CB * k.OW * (double)d.C * 9;
-    const long n = reps > 0 ? reps : std::max(1000L, (long)(1.5e8 / r.flops)); /* ~25-50 ms per trial */
+    const long n = reps > 0 ? reps : std::max(1000L, (long)(1.5e8 / r.flops)); /* ~1-2 ms per trial: a full 64-C sweep takes ~15 s */
     for (long i = 0; i < n / 4; i++) k.fn(d.Cb, d.in, d.in_plane, d.in_row, d.w, d.w_kb, d.b, d.o, d.o_kb, fs);
     /* Three clocks around the same loop: core cycles (perf), TSC ticks
      * (fixed base clock) and wall time. Their ratios are the cross-check. */

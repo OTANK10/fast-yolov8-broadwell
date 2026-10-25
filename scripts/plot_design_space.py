@@ -139,7 +139,7 @@ leg = [Line2D([], [], marker="o", ls="", color="#444", label="microkernel alone 
 axr.legend(handles=leg, fontsize=8, loc="lower right", frameon=True)
 fig.suptitle(f"Stride-1 kernel design space on ece028: hand-allocated tiles reach {best_alone:.0f}% alone and {best_layer:.0f}% in all 32 layers",
              fontsize=12.5, x=0.01, ha="left")
-fig.text(0.01, 0.005, "1 core, cycles = time × 3.4 GHz (max turbo, as in Assignment 2), GCC 8.5 -O3 -march=broadwell, FP32. Sources: results/s1_*_b1_t1.csv, s1_tile_sweep.csv, " + ("ukr_C64_nosilu.csv." if OFF else "ukr_sweep*.csv; v2a alone = one ece028 run.") + "",
+fig.text(0.01, 0.005, "1 core, cycles = time × 3.4 GHz (max turbo, as in Assignment 2), GCC 8.5 -O3 -march=broadwell, FP32. Sources: results/s1_*_b1_t1.csv, s1_tile_sweep.csv, " + (os.path.basename(C64) + "." if OFF else "ukr_sweep*.csv; v2a alone = one ece028 run.") + "",
          fontsize=7.5, color="#666")
 fig.tight_layout(rect=(0, 0.02, 1, 0.96))
 fig.savefig(a.out, dpi=170)

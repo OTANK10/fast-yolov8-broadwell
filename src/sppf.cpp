@@ -20,6 +20,7 @@
  *    buffer that model.9.cv2 reads, so the Concat is free. Slice 0 is a copy of X
  *    (in the full network cv1 would write it there directly).
  *  v1: direct 5-wide max, 4 vmaxps per output per pass (8 per pool).
+ *  v3: v2's rows pass with straight-line edges, columns pass done row by row (see below).
  *  v2: reuses pair maxes P[j] = max(s[j], s[j+1]); out[i] = max(P[i-2], P[i], s[i+2]),
  *      3 vmaxps per output per pass (6 per pool), 25% fewer port-1 ops.
  */
@@ -113,6 +114,48 @@ static void pool5_plane(const float *src, size_t sr, float *dst, size_t dr, floa
     for (int x = 0; x < W; x++) pool5_line<PAIR>(tmp + (size_t)x * CB, (size_t)W * CB, dst + (size_t)x * CB, dr, H);
 }
 
+/* v3: the same math with less overhead around it. Lines are short (W = H = 20), so in v1/v2
+ * the 4 edge outputs of every line (20%) ran a variable-length loop, and the columns pass walked
+ * down one column at a time. v3 writes the edges as straight-line code and does the columns pass
+ * row by row: output row y = max of rows y-2..y+2, a long contiguous loop over the W pixels, with
+ * the edge handled once per row (rows 0, 1, H-2, H-1 just use fewer rows). */
+static inline void pool5_row_v3(const float *s, float *d, int n) {   /* along a row, pair reuse */
+    auto L = [&](int i) { return vload(s + (size_t)i * CB); };
+    auto S = [&](int i, vec v) { vstore(d + (size_t)i * CB, v); };
+    if (n < 5) { pool5_line<true>(s, CB, d, CB, n); return; }
+    const vec a0 = L(0), a1 = L(1), a2 = L(2), a3 = L(3);
+    vec p0 = vmax(a0, a1), p1 = vmax(a1, a2);                /* P[0], P[1] */
+    S(0, vmax(p0, a2));                                      /* max s0..s2 */
+    S(1, vmax(p0, vmax(a2, a3)));                            /* max s0..s3 */
+    for (int i = 2; i < n - 2; i++) {
+        const vec p2 = vmax(L(i), L(i + 1));
+        S(i, vmax(vmax(p0, p2), L(i + 2)));
+        p0 = p1; p1 = p2;
+    }
+    /* p0 = P[n-4], p1 = P[n-3] */
+    const vec b1 = L(n - 1), b2 = L(n - 2);
+    S(n - 2, vmax(p0, vmax(b2, b1)));                        /* max s[n-4..n-1] */
+    S(n - 1, vmax(p1, b1));                                  /* max s[n-3..n-1] */
+}
+static void pool5_plane_v3(const float *src, size_t sr, float *dst, size_t dr, float *tmp, int H, int W) {
+    const size_t tr = (size_t)W * CB;
+    for (int y = 0; y < H; y++) pool5_row_v3(src + y * sr, tmp + y * tr, W);
+    for (int y = 0; y < H; y++) {
+        const int lo = std::max(0, y - 2), hi = std::min(H - 1, y + 2);
+        const float *t = tmp + lo * tr;
+        float *o = dst + y * dr;
+        if (hi - lo == 4) {
+            for (int x = 0; x < W; x++) {
+                const float *q = t + (size_t)x * CB;
+                const vec a = vmax(vload(q), vload(q + tr)), b = vmax(vload(q + 2 * tr), vload(q + 3 * tr));
+                vstore(o + (size_t)x * CB, vmax(vmax(a, b), vload(q + 4 * tr)));
+            }
+        } else {
+            for (int x = 0; x < W; x++) vstore(o + (size_t)x * CB, vmax_range(t + (size_t)x * CB, tr, 0, hi - lo));
+        }
+    }
+}
+
 /* per-thread scratch for the rows pass, allocated once (never inside a timed call after the first) */
 static float *scratch(size_t nfloats) {
     static thread_local float *buf = nullptr;
@@ -121,7 +164,7 @@ static float *scratch(size_t nfloats) {
     return buf;
 }
 
-template <bool PAIR>
+template <int VER>
 static void sppf_pool_blk(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo) {
     if (C % CB) throw std::invalid_argument("sppf_pool: C must be a multiple of 8");
     const int Cb = C / CB, Hpi = H + 2 * in_halo, Wpi = W + 2 * in_halo, Hpo = H + 2 * out_halo, Wpo = W + 2 * out_halo;
@@ -133,24 +176,28 @@ static void sppf_pool_blk(int N, int C, int H, int W, const float *in, int in_ha
             float *o[4];
             for (int k = 0; k < 4; k++) o[k] = out + blk_idx(4 * Cb, Hpo, Wpo, n, k * Cb + cb, out_halo, out_halo);
             for (int y = 0; y < H; y++) std::memcpy(o[0] + y * ro, x + y * ri, (size_t)W * CB * sizeof(float)); /* slice 0: X */
-            pool5_plane<PAIR>(x, ri, o[1], ro, tmp, H, W);       /* P1 = P(X)  */
-            pool5_plane<PAIR>(o[1], ro, o[2], ro, tmp, H, W);    /* P2 = P(P1) */
-            pool5_plane<PAIR>(o[2], ro, o[3], ro, tmp, H, W);    /* P3 = P(P2) */
+            if (VER == 3) pool5_plane_v3(x, ri, o[1], ro, tmp, H, W); else pool5_plane<VER == 2>(x, ri, o[1], ro, tmp, H, W);       /* P1 = P(X)  */
+            if (VER == 3) pool5_plane_v3(o[1], ro, o[2], ro, tmp, H, W); else pool5_plane<VER == 2>(o[1], ro, o[2], ro, tmp, H, W);    /* P2 = P(P1) */
+            if (VER == 3) pool5_plane_v3(o[2], ro, o[3], ro, tmp, H, W); else pool5_plane<VER == 2>(o[2], ro, o[3], ro, tmp, H, W);    /* P3 = P(P2) */
         }
 }
 } // namespace
 
 void sppf_pool_v1(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo) {
-    sppf_pool_blk<false>(N, C, H, W, in, in_halo, out, out_halo);
+    sppf_pool_blk<1>(N, C, H, W, in, in_halo, out, out_halo);
 }
 void sppf_pool_v2(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo) {
-    sppf_pool_blk<true>(N, C, H, W, in, in_halo, out, out_halo);
+    sppf_pool_blk<2>(N, C, H, W, in, in_halo, out, out_halo);
 }
-/* vmaxps one pool issues on an n-long line (bench_pool uses it for max-ops per cycle) */
+void sppf_pool_v3(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo) {
+    sppf_pool_blk<3>(N, C, H, W, in, in_halo, out, out_halo);
+}
+/* vmaxps one pool issues on an n-long line: pair 0 = direct, 1 = v2 pairs, 2 = v3 rows pass */
 long sppf_vmax_per_line(int n, int pair) {
     auto rng = [&](int i) { return (long)(std::min(n - 1, i + 2) - std::max(0, i - 2)); };
     if (n < 5) { long t = 0; for (int i = 0; i < n; i++) t += rng(i); return t; }
     long t = rng(0) + rng(1) + rng(n - 2) + rng(n - 1);
+    if (pair == 2) return 8 + 3L * (n - 4);              /* v3 rows pass: straight-line edges share P[0], P[1] */
     return t + (pair ? 2 + 3L * (n - 4) : 4L * (n - 4));
 }
 

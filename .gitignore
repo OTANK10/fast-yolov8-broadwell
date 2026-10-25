@@ -21,3 +21,12 @@ results/raw/
 *.fls
 *.fdb_latexmk
 *.synctex.gz
+docs/milestone/om/beamer/*.aux
+docs/milestone/om/beamer/*.log
+docs/milestone/om/beamer/*.nav
+docs/milestone/om/beamer/*.out
+docs/milestone/om/beamer/*.snm
+docs/milestone/om/beamer/*.toc
+docs/milestone/om/beamer/*.fdb_latexmk
+docs/milestone/om/beamer/*.fls
+docs/milestone/om/beamer/*.vrb

@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-o", "--out", default="results/ukr_design_space.png")
+ap.add_argument("--intrinsics-only", action="store_true", help="leave out the inline-asm kernels")
 ap.add_argument("--silu-on", action="store_true", help="isolated points with the fused SiLU (older sweeps) instead of results/ukr_C64_nosilu.csv")
 a = ap.parse_args()
 R = "results"
@@ -74,6 +75,9 @@ pts = [
     ("2x5", "v2b", "asm", layer_pct("s1_v2b"), iso("2x5asm")),
     ("4x3", "v8a", "asm", layer_pct("s1_v8a"), iso("4x3asm")),
 ]
+if a.intrinsics_only:
+    pts = [p for p in pts if p[2] != "asm"]
+    pts.insert(1, ("1x10", "sweep", "intr", sweep["1x10"], iso("1x10")))
 best_alone = max(v for *_, v in pts if v is not None)
 best_layer = max(l for *_, l, v in pts if l is not None)
 lecture = [("v6 unroll 9 taps", layer_pct("s1_v6")), ("v6b unroll 3", layer_pct("s1_v6b")),
@@ -106,7 +110,7 @@ axl.set_title("1. How many accumulators: 10" + (" (alone / in 4 layers)" if OFF 
 axl.grid(alpha=0.3)
 
 # ---- right: the design space at >= 10 accumulators, alone vs in the layers
-NOTE = {"v2a": " (inlined)", "v2b": " (called)", "v10": " + 2×5 (called)"}
+NOTE = {"v2a": " (inlined)", "v2b": " (called)", "v10": " + 2×5 (called)", "sweep": " (layers: 4-layer sweep)"}
 rows = [(f"{lab}: {t} {'asm' if impl == 'asm' else 'intrinsics'}{NOTE.get(lab, '')}", impl, lay, iso) for t, lab, impl, lay, iso in pts]
 rows += [(f"{lab}: 2x5 intrinsics", "lect", v, None) for lab, v in lecture]
 rows = sorted(rows, key=lambda r: -(r[3] if r[3] is not None else (r[2] or 0) - 100))
@@ -132,12 +136,13 @@ axr.set_xlabel("% of one core's peak")
 axr.grid(axis="x", alpha=0.3)
 axr.set_title(f"2. Same math, {min(l for *_, l, v in pts if l):.0f}% to {best_alone:.0f}%: the tile, and who allocates registers", fontsize=10.5, loc="left")
 from matplotlib.lines import Line2D
-leg = [Line2D([], [], marker="o", ls="", color="#444", label="microkernel alone (bench_ukr, C = 64, SiLU " + ("off)" if OFF else "on)")),
+leg = [] if False else [Line2D([], [], marker="o", ls="", color="#444", label="microkernel alone (bench_ukr, C = 64, SiLU " + ("off)" if OFF else "on)")),
        Line2D([], [], marker="o", ls="", mfc="white", mec="#444", mew=1.6, label="all 32 YOLOv8n layers (SiLU on)"),
-       Line2D([], [], color=BLUE, lw=6, alpha=0.5, label="inline asm (registers fixed by hand)"),
        Line2D([], [], color=GREY, lw=6, alpha=0.5, label="intrinsics (GCC allocates)")]
+if not a.intrinsics_only:
+    leg.insert(2, Line2D([], [], color=BLUE, lw=6, alpha=0.5, label="inline asm (registers fixed by hand)"))
 axr.legend(handles=leg, fontsize=8, loc="lower right", frameon=True)
-fig.suptitle(f"Stride-1 kernel design space on ece028: hand-allocated tiles reach {best_alone:.0f}% alone and {best_layer:.0f}% in all 32 layers",
+fig.suptitle((f"Stride-1 kernel design space on ece028 (intrinsics only): 2×5 (v2) reaches {[p for p in pts if p[1] == 'v2'][0][4]:.0f}% alone and {[p for p in pts if p[1] == 'v2'][0][3]:.0f}% in all 32 layers" if a.intrinsics_only else f"Stride-1 kernel design space on ece028: hand-allocated tiles reach {best_alone:.0f}% alone and {best_layer:.0f}% in all 32 layers"),
              fontsize=12.5, x=0.01, ha="left")
 fig.text(0.01, 0.005, "1 core, cycles = time × 3.4 GHz (max turbo, as in Assignment 2), GCC 8.5 -O3 -march=broadwell, FP32. Sources: results/s1_*_b1_t1.csv, s1_tile_sweep.csv, " + (os.path.basename(C64) + "." if OFF else "ukr_sweep*.csv; v2a alone = one ece028 run.") + "",
          fontsize=7.5, color="#666")

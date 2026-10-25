@@ -20,9 +20,13 @@ ap.add_argument("csv")
 ap.add_argument("-o", "--out", default=None)
 ap.add_argument("--peak", type=float, default=32.0)
 ap.add_argument("--machine", default="ece028")
+ap.add_argument("--tiles", default=None, help="comma list of tiles to plot (default: all in the CSV)")
 a = ap.parse_args()
 
 rows = list(csv.DictReader(open(a.csv)))
+if a.tiles:
+    keep = set(a.tiles.split(","))
+    rows = [r for r in rows if r["tile"] in keep]
 tiles = list(dict.fromkeys(r["tile"] for r in rows))
 by = defaultdict(lambda: defaultdict(dict))  # tile -> run -> k -> fpc
 ws = defaultdict(dict)                         # tile -> k -> working set KB

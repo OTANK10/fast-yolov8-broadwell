@@ -2,11 +2,14 @@
 # Run one kernel over every layer of one kind and collect a CSV.
 #   scripts/run_kernels.sh s1_v1 3x3s1            # batch 1, 1 thread
 #   scripts/run_kernels.sh s1_v1 3x3s1 16 20      # batch 16, 20 threads
+#   EXTRA=--no-silu scripts/run_kernels.sh s1_v10 3x3s1   # extra bench_layer flags; tag goes in the file name
 # kinds: 3x3s1 (Om)  3x3s2 (O'Malley)  1x1 (Simon)   -> results/<kernel>_b<N>_t<T>.csv
 set -euo pipefail
 kernel=$1; kind=$2; batch=${3:-1}; threads=${4:-1}; reps=${REPS:-20}
 data=data/tensors/b$batch
-out=results/${kernel}_b${batch}_t${threads}.csv
+extra=${EXTRA:-}
+tag=$(echo "$extra" | tr -d ' -' )
+out=results/${kernel}_b${batch}_t${threads}${tag:+_$tag}.csv
 mkdir -p results
 [ -d build ] || cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DYOLO_ENABLE_BROADWELL=ON >/dev/null
 cmake --build build -j >/dev/null
@@ -16,7 +19,7 @@ echo "layer,kernel,N,C,H,W,K,R,S,stride,threads,flops,best_cycles,median_cycles,
 fail=0
 while IFS=, read -r dir onnx_name k _; do
   [[ "$k" == "$kind" ]] || continue
-  if ! ./build/bench_layer "$data/$dir" "$kernel" -r "$reps" -t "$threads" --csv >> "$out"; then
+  if ! ./build/bench_layer "$data/$dir" "$kernel" -r "$reps" -t "$threads" $extra --csv >> "$out"; then
     echo "FAIL: $dir" >&2; fail=1
   fi
 done < <(tail -n +2 "$data/layers.csv")

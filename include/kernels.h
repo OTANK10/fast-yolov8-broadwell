@@ -56,6 +56,7 @@ typedef void (*pool_fn_t)(int N, int C, int H, int W, const float *in, int in_ha
 void sppf_pool_v1(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo); // AVX2, separable, 8 vmaxps/output
 void sppf_pool_v2(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo); // v1 + shared pair maxes, 6 vmaxps/output
 void sppf_pool_v3(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo); // v2 rows + straight-line edges, columns pass row by row
+void sppf_pool_v4(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo); // v3 with a 5-row ring instead of the tmp plane (fits L1)
 long sppf_vmax_per_line(int n, int pair); // vmaxps per 1-D pass of length n: 0 direct, 1 v2 pairs, 2 v3 rows (for bench_pool)
 
 } // namespace fastyolo

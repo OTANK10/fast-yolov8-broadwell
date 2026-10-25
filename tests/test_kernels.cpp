@@ -121,12 +121,12 @@ int main() {
     {   // SPPF pools on NCHW8c vs the NCHW reference. Max is exact, so the outputs must be identical.
         // Shapes: the real 128 x 20 x 20, odd sizes, lines shorter than the 5-wide window, batch 2,
         // and all-negative inputs (a zero instead of -inf padding would show up as 0 at the border).
-        pool_fn_t pools[] = {sppf_pool_v1, sppf_pool_v2, sppf_pool_v3};
-        const char *pnames[] = {"sppf_v1", "sppf_v2", "sppf_v3"};
+        pool_fn_t pools[] = {sppf_pool_v1, sppf_pool_v2, sppf_pool_v3, sppf_pool_v4};
+        const char *pnames[] = {"sppf_v1", "sppf_v2", "sppf_v3", "sppf_v4"};
         struct { int N, C, H, W; float shift; } ps[] = {{1, 128, 20, 20, 0.f}, {1, 16, 7, 9, 0.f}, {2, 8, 5, 5, 0.f},
                                                         {1, 8, 3, 4, 0.f}, {1, 8, 1, 6, 0.f}, {1, 24, 6, 11, -10.f}};
         std::normal_distribution<float> nd(0.0f, 1.0f);
-        for (int v = 0; v < 3; v++)
+        for (int v = 0; v < 4; v++)
             for (auto s : ps) {
                 std::vector<float> x((size_t)s.N * s.C * s.H * s.W);
                 for (auto &e : x) e = nd(rng) + s.shift;

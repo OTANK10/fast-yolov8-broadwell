@@ -118,6 +118,44 @@ int main() {
     struct { int C, K, H; } k1[] = {{32, 32, 20}, {48, 32, 20}, {384, 256, 5}, {64, 64, 10}};
     for (auto s : k1) worst = std::fmax(worst, check_kernel("1x1_v1", conv1x1_v1, make_desc(1, s.C, s.H, s.H, s.K, 1, 1, 1), rng));
 
+    {   // SPPF pools on NCHW8c vs the NCHW reference. Max is exact, so the outputs must be identical.
+        // Shapes: the real 128 x 20 x 20, odd sizes, lines shorter than the 5-wide window, batch 2,
+        // and all-negative inputs (a zero instead of -inf padding would show up as 0 at the border).
+        pool_fn_t pools[] = {sppf_pool_v1, sppf_pool_v2};
+        const char *pnames[] = {"sppf_v1", "sppf_v2"};
+        struct { int N, C, H, W; float shift; } ps[] = {{1, 128, 20, 20, 0.f}, {1, 16, 7, 9, 0.f}, {2, 8, 5, 5, 0.f},
+                                                        {1, 8, 3, 4, 0.f}, {1, 8, 1, 6, 0.f}, {1, 24, 6, 11, -10.f}};
+        std::normal_distribution<float> nd(0.0f, 1.0f);
+        for (int v = 0; v < 2; v++)
+            for (auto s : ps) {
+                std::vector<float> x((size_t)s.N * s.C * s.H * s.W);
+                for (auto &e : x) e = nd(rng) + s.shift;
+                const int hi = 1, ho = 1;
+                float *xb = alloc_aligned(blk_size(s.N, s.C, s.H, s.W, hi));
+                float *ob = alloc_aligned(blk_size(s.N, 4 * s.C, s.H, s.W, ho));
+                nchw_to_blk(x.data(), s.N, s.C, s.H, s.W, hi, xb);
+                pools[v](s.N, s.C, s.H, s.W, xb, hi, ob, ho);
+                std::vector<float> got((size_t)s.N * 4 * s.C * s.H * s.W);
+                blk_to_nchw(ob, s.N, 4 * s.C, s.H, s.W, ho, got.data());
+                const size_t img = (size_t)s.C * s.H * s.W;
+                for (int n = 0; n < s.N; n++) {
+                    std::vector<float> xi(x.begin() + n * img, x.begin() + (n + 1) * img);
+                    auto ref = sppf_pool_reference(xi, s.C, s.H, s.W);
+                    for (size_t i = 0; i < ref.size(); i++) CHECK(got[n * 4 * img + i] == ref[i]);
+                }
+                // the halo of every output plane must still be zero
+                const int Hp = s.H + 2 * ho, Wp = s.W + 2 * ho;
+                for (int n = 0; n < s.N; n++)
+                    for (int cb = 0; cb < 4 * s.C / CB; cb++)
+                        for (int y = 0; y < Hp; y++)
+                            for (int xx = 0; xx < Wp; xx++)
+                                if (y == 0 || y == Hp - 1 || xx == 0 || xx == Wp - 1)
+                                    for (int l = 0; l < CB; l++) CHECK(ob[blk_idx(4 * s.C / CB, Hp, Wp, n, cb, y, xx) + l] == 0.f);
+                free(xb); free(ob);
+                std::printf("  %-8s N=%d C=%3d %2dx%-2d  exact match\n", pnames[v], s.N, s.C, s.H, s.W);
+            }
+    }
+
     CHECK(worst <= 1e-4);
     std::cout << "All kernel correctness checks passed.\n";
 }

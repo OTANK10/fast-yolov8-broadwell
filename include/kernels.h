@@ -49,5 +49,12 @@ void conv1x1_v1(const conv_desc_t *d, const float *in, const float *w,
 // Pooling core only: concatenate X, P(X), P(P(X)), P(P(P(X))) along C,
 // where P is 5x5 stride-1 maxpool with padding 2. Plain NCHW, batch 1.
 std::vector<float> sppf_pool_reference(const std::vector<float> &input, int channels, int h, int w);
+// Same result on NCHW8c, batch N, C a multiple of 8. in: [N][C/8][H+2*in_halo][W+2*in_halo][8];
+// out: [N][4C/8][H+2*out_halo][W+2*out_halo][8], channel slices X, P1, P2, P3 (the Concat
+// model.9.cv2 reads). Writes only the interior; the out halo stays as it was (zero).
+typedef void (*pool_fn_t)(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo);
+void sppf_pool_v1(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo); // AVX2, separable, 8 vmaxps/output
+void sppf_pool_v2(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo); // v1 + shared pair maxes, 6 vmaxps/output
+long sppf_vmax_per_line(int n, int pair); // vmaxps per 1-D pass of length n (for bench_pool)
 
 } // namespace fastyolo

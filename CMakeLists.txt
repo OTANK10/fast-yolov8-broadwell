@@ -53,6 +53,10 @@ add_test(NAME kernel_tests COMMAND test_kernels)
 add_executable(bench_layer benchmarks/bench_layer.cpp)
 target_link_libraries(bench_layer PRIVATE yolov8_kernels)
 
+# SPPF max-pool on the real model.9 tensors: ./build/bench_pool data/tensors/b1 v2
+add_executable(bench_pool benchmarks/bench_pool.cpp)
+target_link_libraries(bench_pool PRIVATE yolov8_kernels)
+
 # Generated assembly of the stride-1 kernel: cmake --build build --target asm_s1
 add_custom_target(asm_s1
     COMMAND ${CMAKE_CXX_COMPILER} -O3 -std=c++17 $<$<BOOL:${YOLO_ENABLE_BROADWELL}>:-march=broadwell>

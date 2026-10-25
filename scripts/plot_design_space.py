@@ -58,13 +58,14 @@ pts = [
     ("4x3", "v8", "intr", layer_pct("s1_v8"), None),
     ("2x5", "v2a", "asm", layer_pct("s1_v2a"), ISOLATED_EXTRA["2x5asm"]),
     ("2x6", "v10", "asm", layer_pct("s1_v10"), iso_pct(f"{R}/ukr_sweep_2x6.csv", "2x6asm")),
+    ("2x5", "v2b", "asm", layer_pct("s1_v2b"), ISOLATED_EXTRA["2x5asm"]),
     ("4x3", "v8a", "asm", layer_pct("s1_v8a"), iso_pct(f"{R}/ukr_sweep.csv", "4x3asm")),
 ]
 lecture = [("v6 unroll 9 taps", layer_pct("s1_v6")), ("v6b unroll 3", layer_pct("s1_v6b")),
            ("v7 pipelined", layer_pct("s1_v7")), ("v7b", layer_pct("s1_v7b"))]
 
 GREY, BLUE, LIGHT, AMBER = "#6B7782", "#0C6A87", "#B8C1C8", "#B7731A"
-fig, (axl, axr) = plt.subplots(1, 2, figsize=(12.5, 5.6), gridspec_kw={"width_ratios": [1, 1.45]})
+fig, (axl, axr) = plt.subplots(1, 2, figsize=(12.5, 6.8), gridspec_kw={"width_ratios": [1, 1.45]})
 
 # ---- left: step 2, accumulators (in-layer tile sweep, intrinsics)
 axl.plot([0, 100 / 10.1, 12.5], [0, 100, 100], color=AMBER, ls="--", lw=1.2)
@@ -84,7 +85,8 @@ axl.set_title("1. How many accumulators: 10 (tile sweep, 4 layers)", fontsize=10
 axl.grid(alpha=0.3)
 
 # ---- right: the design space at >= 10 accumulators, alone vs in the layers
-rows = [(f"{lab}: {t} {'asm' if impl == 'asm' else 'intrinsics'}", impl, lay, iso) for t, lab, impl, lay, iso in pts]
+NOTE = {"v2a": " (inlined)", "v2b": " (called)", "v10": " + 2×5 (called)"}
+rows = [(f"{lab}: {t} {'asm' if impl == 'asm' else 'intrinsics'}{NOTE.get(lab, '')}", impl, lay, iso) for t, lab, impl, lay, iso in pts]
 rows += [(f"{lab}: 2x5 intrinsics", "lect", v, None) for lab, v in lecture]
 rows = sorted(rows, key=lambda r: -(r[3] if r[3] is not None else (r[2] or 0) - 100))
 for y, (lab, impl, lay, iso) in enumerate(rows):
@@ -107,14 +109,14 @@ axr.set_ylim(len(rows) - 0.3, -0.8)
 axr.set_xlim(40, 100); axr.axvline(100, color="#333", ls=":", lw=1)
 axr.set_xlabel("% of one core's peak")
 axr.grid(axis="x", alpha=0.3)
-axr.set_title("2. Same math, 50% to 89%: tile and who allocates registers", fontsize=10.5, loc="left")
+axr.set_title("2. Same math, 50% to 89%: the tile, and who allocates registers", fontsize=10.5, loc="left")
 from matplotlib.lines import Line2D
 leg = [Line2D([], [], marker="o", ls="", color="#444", label="microkernel alone (bench_ukr, C = 64)"),
        Line2D([], [], marker="o", ls="", mfc="white", mec="#444", mew=1.6, label="all 32 YOLOv8n layers"),
        Line2D([], [], color=BLUE, lw=6, alpha=0.5, label="inline asm (registers fixed by hand)"),
        Line2D([], [], color=GREY, lw=6, alpha=0.5, label="intrinsics (GCC allocates)")]
-axr.legend(handles=leg, fontsize=8, loc="upper left", frameon=True)
-fig.suptitle("Stride-1 kernel design space on ece028: the hand-allocated 2×6 tile reaches 89% of peak alone",
+axr.legend(handles=leg, fontsize=8, loc="lower right", frameon=True)
+fig.suptitle("Stride-1 kernel design space on ece028: hand-allocated tiles reach 89% alone and 84% in all 32 layers",
              fontsize=12.5, x=0.01, ha="left")
 fig.text(0.01, 0.005, "1 core, perf_event core cycles, GCC 8.5 -O3 -march=broadwell, FP32. Sources: results/s1_*_b1_t1.csv, s1_tile_sweep.csv, ukr_sweep*.csv; v2a alone = one ece028 run.",
          fontsize=7.5, color="#666")

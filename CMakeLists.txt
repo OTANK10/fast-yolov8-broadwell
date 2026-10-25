@@ -57,6 +57,10 @@ target_link_libraries(bench_layer PRIVATE yolov8_kernels)
 add_executable(bench_pool benchmarks/bench_pool.cpp)
 target_link_libraries(bench_pool PRIVATE yolov8_kernels)
 
+# The SPPF pool microkernel alone (one 8-channel plane, in cache): ./build/bench_pool_ukr 20
+add_executable(bench_pool_ukr benchmarks/bench_pool_ukr.cpp)
+target_link_libraries(bench_pool_ukr PRIVATE yolov8_kernels)
+
 # Generated assembly of the stride-1 kernel: cmake --build build --target asm_s1
 add_custom_target(asm_s1
     COMMAND ${CMAKE_CXX_COMPILER} -O3 -std=c++17 $<$<BOOL:${YOLO_ENABLE_BROADWELL}>:-march=broadwell>

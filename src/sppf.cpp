@@ -250,7 +250,24 @@ static void sppf_pool_blk(int N, int C, int H, int W, const float *in, int in_ha
             if (VER == 5) pool5_plane_v5(o[2], ro, o[3], ro, tmp, H, W); else if (VER == 4) pool5_plane_v4(o[2], ro, o[3], ro, tmp, H, W); else if (VER == 3) pool5_plane_v3(o[2], ro, o[3], ro, tmp, H, W); else pool5_plane<VER == 2>(o[2], ro, o[3], ro, tmp, H, W);    /* P3 = P(P2) */
         }
 }
+
+/* ---- isolated microkernels (benchmarks/bench_pool_ukr.cpp): one 5x5 pool of ONE 8-channel
+ * plane, src -> dst, nothing else (no other channel blocks, no chaining, no concat copy). */
+static void ukr_v1(const float *s, size_t sr, float *d, size_t dr, float *t, int H, int W) { pool5_plane<false>(s, sr, d, dr, t, H, W); }
+static void ukr_v2(const float *s, size_t sr, float *d, size_t dr, float *t, int H, int W) { pool5_plane<true>(s, sr, d, dr, t, H, W); }
+static void ukr_v3(const float *s, size_t sr, float *d, size_t dr, float *t, int H, int W) { pool5_plane_v3(s, sr, d, dr, t, H, W); }
+static void ukr_v4(const float *s, size_t sr, float *d, size_t dr, float *t, int H, int W) { pool5_plane_v4(s, sr, d, dr, t, H, W); }
+static void ukr_v5(const float *s, size_t sr, float *d, size_t dr, float *t, int H, int W) { pool5_plane_v5(s, sr, d, dr, t, H, W); }
 } // namespace
+/* name, vmaxps mode of the rows pass and of the columns pass (see sppf_vmax_per_line), scratch rows, note */
+const pool_ukr_entry_t POOL_UKRS[] = {
+    {"v1", 0, 0, 0, "direct 5-wide max, rows then columns, tmp plane", ukr_v1},
+    {"v2", 1, 1, 0, "shared pair maxes (6 vmaxps/output), tmp plane", ukr_v2},
+    {"v3", 2, 0, 0, "v2 rows + straight-line edges, columns pass row by row", ukr_v3},
+    {"v4", 2, 0, 5, "v3 with a 5-row ring instead of the tmp plane (r % 5 index)", ukr_v4},
+    {"v5", 2, 0, 5, "v4 with rotated row pointers (no imul)", ukr_v5},
+};
+const int POOL_NUKRS = sizeof(POOL_UKRS) / sizeof(POOL_UKRS[0]);
 
 void sppf_pool_v1(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo) {
     sppf_pool_blk<1>(N, C, H, W, in, in_halo, out, out_halo);

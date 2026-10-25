@@ -58,6 +58,12 @@ void sppf_pool_v2(int N, int C, int H, int W, const float *in, int in_halo, floa
 void sppf_pool_v3(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo); // v2 rows + straight-line edges, columns pass row by row
 void sppf_pool_v4(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo); // v3 with a 5-row ring instead of the tmp plane (fits L1)
 void sppf_pool_v5(int N, int C, int H, int W, const float *in, int in_halo, float *out, int out_halo); // v4 with rotated row pointers (no r % 5 on port 1)
+// Isolated pool microkernels: one 5x5 pool of one 8-channel plane. s, d point at pixel (0, 0) of the
+// interior, sr/dr are row strides in floats; t is scratch: H*W*8 floats, or 5*W*8 if scratch_rows = 5.
+typedef void (*pool_ukr_fn_t)(const float *s, size_t sr, float *d, size_t dr, float *t, int H, int W);
+typedef struct { const char *name; int rows_mode, cols_mode, scratch_rows; const char *note; pool_ukr_fn_t fn; } pool_ukr_entry_t;
+extern const pool_ukr_entry_t POOL_UKRS[];
+extern const int POOL_NUKRS;
 long sppf_vmax_per_line(int n, int pair); // vmaxps per 1-D pass of length n: 0 direct, 1 v2 pairs, 2 v3 rows (for bench_pool)
 
 } // namespace fastyolo

@@ -131,6 +131,9 @@ int main() {
         worst = std::fmax(worst, check_kernel("s1_v8b", conv3x3_s1_v8b, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
         worst = std::fmax(worst, check_kernel("s1_v9", conv3x3_s1_v9, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
         worst = std::fmax(worst, check_kernel("s1_v9mt", conv3x3_s1_v9mt, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v10", conv3x3_s1_v10, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v10mt", conv3x3_s1_v10mt, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
+        worst = std::fmax(worst, check_kernel("s1_v2b", conv3x3_s1_v2b, make_desc(1, s.C, s.H, s.H, s.K, 3, 1, 1), rng));
     }
     // v4/v4b/v5 tails: widths that leave 0, 1, 2, 3, 4 and 5 pixels after the 6-wide tiles
     for (int Wd : {6, 7, 8, 9, 10, 11, 20, 40})
@@ -144,6 +147,8 @@ int main() {
     worst = std::fmax(worst, check_kernel("s1_v3", conv3x3_s1_v3, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
     worst = std::fmax(worst, check_kernel("s1_v7", conv3x3_s1_v7, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
     worst = std::fmax(worst, check_kernel("s1_v7mt", conv3x3_s1_v7mt, make_desc(2, 32, 10, 10, 32, 3, 1, 0), rng));
+    for (int Wd : {5, 6, 10, 11, 16, 20, 40, 80, 160})  // v10 splits: 6s and 5s
+        worst = std::fmax(worst, check_kernel("s1_v10", conv3x3_s1_v10, make_desc(1, 32, 4, Wd, 32, 3, 1, 1), rng));
     for (int Wd : {6, 7, 8, 10, 15, 20, 25, 40})  // v8 row tails: 0, 1, 2 pixels after the 3-wide tiles; K/8 = 4, 10, 2
         for (int K : {32, 80, 16})
         {

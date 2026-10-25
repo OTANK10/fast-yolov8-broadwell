@@ -40,6 +40,9 @@ FASTYOLO_CONV_DECL(conv3x3_s1_v8mt) // v8a + OpenMP
 FASTYOLO_CONV_DECL(conv3x3_s1_v8b)  // v8a, row remainders by 2x5 tiles
 FASTYOLO_CONV_DECL(conv3x3_s1_v9)   // per-layer dispatch: v8b (C <= 80) or v2 (C >= 128), 1 core
 FASTYOLO_CONV_DECL(conv3x3_s1_v9mt) // v9 + OpenMP
+FASTYOLO_CONV_DECL(conv3x3_s1_v10)  // 2x6 + 2x5 asm microkernels called noinline (as in bench_ukr), 1 core
+FASTYOLO_CONV_DECL(conv3x3_s1_v10mt) // v10 + OpenMP
+FASTYOLO_CONV_DECL(conv3x3_s1_v2b)  // 2x5 asm microkernel called noinline (control for v2a)
 // Weight packer for v5: [Kb/2][Cb][3][3][8 ic][2][8 oc]. Same size as pack_weights.
 void pack_weights_s1_kb2(const float *oihw, int K, int C, int R, int S, float *dst);
 typedef void (*pack_fn_t)(const float *oihw, int K, int C, int R, int S, float *dst);

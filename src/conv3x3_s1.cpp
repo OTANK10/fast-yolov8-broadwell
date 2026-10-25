@@ -1010,7 +1010,7 @@ static void ukr_bs_entry(int Cb, const float *ip, size_t in_plane, size_t in_row
                          const float *b, float *o, size_t o_kb, int fs) {
     ukr_bs<KB, OW>(Cb, ip, in_plane, in_row, w, w_kb, b, o, o_kb, fs);
 }
-static void ukr_2x5_asm_entry(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+static __attribute__((noinline)) void ukr_2x5_asm_entry(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
                               const float *b, float *o, size_t o_kb, int fs) {
     ukr_2x5_asm(Cb, ip, in_plane, in_row, w, w_kb, b, o, o_kb, fs);
 }
@@ -1024,7 +1024,7 @@ static void ukr_4x3_asm_entry(int Cb, const float *ip, size_t in_plane, size_t i
  * (v2's 2x5: 2), shuffling accumulators at 15 live registers. Here the
  * registers are fixed: 12 accumulators, ymm13 broadcast, ymm14/15 weights.
  */
-static void ukr_2x6_asm_entry(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
+static __attribute__((noinline)) void ukr_2x6_asm_entry(int Cb, const float *ip, size_t in_plane, size_t in_row, const float *w, size_t w_kb,
                               const float *b, float *o, size_t o_kb, int fuse_silu) {
     const __m256 b0 = _mm256_loadu_ps(b), b1 = _mm256_loadu_ps(b + CB);
     __m256 a00 = b0, a01 = b0, a02 = b0, a03 = b0, a04 = b0, a05 = b0;
@@ -1241,6 +1241,59 @@ const s1_ukr_entry_t S1_UKRS[] = {
 };
 const int S1_NUKRS = (int)(sizeof(S1_UKRS) / sizeof(S1_UKRS[0]));
 
+/* ------------------------------------------- v10: asm tiles in the layer ---- */
+/*
+ * v2a inlined the 2x5 asm block into the layer loop, and GCC 8.5 then kept 3
+ * of its 10 accumulators on the stack, reloading and storing them around
+ * every tap (results/asm: vmovaps 168(%rsp) ...). In bench_ukr the same
+ * microkernel is a separate function and keeps all 10 in registers (86.7% vs
+ * v2a's 73.6% in layers). v10 calls the asm microkernels exactly as bench_ukr
+ * does (noinline, one call per output tile), so the layer runs the isolated
+ * kernel's code. Rows are split into 2x6 and 2x5 tiles with no small tiles:
+ * 160 = 25*6 + 2*5, 80 = 10*6 + 4*5, 40 = 5*6 + 2*5, 20 = 4*5.
+ * v2b: the same driver with 2x5 asm tiles only (control for v2a).
+ */
+template <bool USE6>
+static void conv3x3_s1_asm_tiles(const conv_desc_t *d, const float *in, const float *wp,
+                                 const float *bias, float *out, bool threads) {
+    const int Cb = ceil_div(d->C, CB), Kb = ceil_div(d->K, CB), OWd = d->OW;
+    int n6 = USE6 ? OWd / 6 : 0;
+    while (n6 > 0 && (OWd - 6 * n6) % 5 != 0) n6--;
+    if (d->R != 3 || d->S != 3 || d->stride != 1 || d->in_halo != d->pad || Kb % 2 != 0 || (OWd - 6 * n6) % 5 != 0) {
+        static bool warned = false;
+        if (!warned) { warned = true; std::fprintf(stderr, "conv3x3_s1 asm tiles: shape not supported, using generic\n"); }
+        conv_blk_generic(d, in, wp, bias, out);
+        return;
+    }
+    const int Hp = d->H + 2 * d->in_halo, Wp = d->W + 2 * d->in_halo;
+    const int OHp = d->OH + 2 * d->out_halo, OWp = d->OW + 2 * d->out_halo;
+    const size_t in_plane = (size_t)Hp * Wp * CB, out_plane = (size_t)OHp * OWp * CB;
+    const size_t in_row = (size_t)Wp * CB, w_kb = (size_t)Cb * 9 * CB * CB;
+    const int N = d->N, OH = d->OH, KT = Kb / 2, oh_ = d->out_halo, end6 = 6 * n6;
+#pragma omp parallel for collapse(3) schedule(static) if (threads)
+    for (int n = 0; n < N; n++)
+        for (int kt = 0; kt < KT; kt++)
+            for (int oh = 0; oh < OH; oh++) {
+                const int kb = kt * 2;
+                const float *irow = in + blk_idx(Cb, Hp, Wp, n, 0, oh, 0);
+                float *orow = out + blk_idx(Kb, OHp, OWp, n, kb, oh + oh_, oh_);
+                const float *w = wp + kb * w_kb, *b = bias + kb * CB;
+                for (int ow = 0; ow < end6; ow += 6)
+                    ukr_2x6_asm_entry(Cb, irow + (size_t)ow * CB, in_plane, in_row, w, w_kb, b, orow + (size_t)ow * CB, out_plane, d->fuse_silu);
+                for (int ow = end6; ow < OWd; ow += 5)
+                    ukr_2x5_asm_entry(Cb, irow + (size_t)ow * CB, in_plane, in_row, w, w_kb, b, orow + (size_t)ow * CB, out_plane, d->fuse_silu);
+            }
+}
+void conv3x3_s1_v10(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_asm_tiles<true>(d, in, wp, bias, out, false);  /* 2x6 + 2x5 asm tiles, noinline, 1 core */
+}
+void conv3x3_s1_v10mt(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_asm_tiles<true>(d, in, wp, bias, out, true);   /* v10 on all cores */
+}
+void conv3x3_s1_v2b(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
+    conv3x3_s1_asm_tiles<false>(d, in, wp, bias, out, false); /* 2x5 asm tiles only, noinline (control for v2a) */
+}
+
 #endif /* AVX2 */
 
 /* ------------------------------------------------------ weight packing ---- */
@@ -1297,6 +1350,7 @@ S1_FALLBACK(conv3x3_s1_v4) S1_FALLBACK(conv3x3_s1_v4b)
 S1_FALLBACK(conv3x3_s1_v6) S1_FALLBACK(conv3x3_s1_v6b) S1_FALLBACK(conv3x3_s1_v7) S1_FALLBACK(conv3x3_s1_v7b) S1_FALLBACK(conv3x3_s1_v7mt)
 S1_FALLBACK(conv3x3_s1_v2a) S1_FALLBACK(conv3x3_s1_v8) S1_FALLBACK(conv3x3_s1_v8a) S1_FALLBACK(conv3x3_s1_v8mt)
 S1_FALLBACK(conv3x3_s1_v8b) S1_FALLBACK(conv3x3_s1_v9) S1_FALLBACK(conv3x3_s1_v9mt)
+S1_FALLBACK(conv3x3_s1_v10) S1_FALLBACK(conv3x3_s1_v10mt) S1_FALLBACK(conv3x3_s1_v2b)
 /* v5 reads the v5 weight order, so its fallback must too: a plain scalar loop over that order */
 void conv3x3_s1_v5(const conv_desc_t *d, const float *in, const float *wp, const float *bias, float *out) {
     const int Cb = ceil_div(d->C, CB), Kb = ceil_div(d->K, CB);

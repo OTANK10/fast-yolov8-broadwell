@@ -1,0 +1,2 @@
+kernel,N,C,H,W,us,cycles,cycles_per_vec,vmaxps,vmaxps_per_cycle,gb_s,max_abs_err,pass
+sppf_v3,1,128,20,20,66.106,224760,11.706,124800,0.555,15.49,0.00e+00,1

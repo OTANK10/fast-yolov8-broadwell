@@ -1,0 +1,7 @@
+venv/
+data/
+plots/
+*.x
+*.S
+kernel_driver.S
+figures/
